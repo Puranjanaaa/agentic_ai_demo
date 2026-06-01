@@ -84,7 +84,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "A short category label, e.g. 'name', 'project', 'preference', 'goal'.",
+                    "description": (
+                        "Canonical category key. Use exactly one of: "
+                        "'name' (also: what to call the user), "
+                        "'preference' (also: likes, dislikes, favorites), "
+                        "'work' (also: job, profession, occupation, career, what they do), "
+                        "'project' (also: app, side-project, thing they are building/developing), "
+                        "'goal' (also: aim, objective, ambition, plan, what they want to achieve)."
+                    ),
                 },
                 "value": {
                     "type": "string",
@@ -216,8 +223,8 @@ class ToolExecutor:
     def _search_memory(self, query: str) -> str:
         results = self.storage.search_memory_entries(self.session_id, query)
         if not results:
-            return f"No memory entries found matching '{query}'."
-        lines = [f"Found {len(results)} result(s):"]
+            return "Long-term memory is empty — no information has been saved yet."
+        lines = [f"All saved memory ({len(results)} entries):"]
         for e in results:
             ctx = f" ({e.context})" if e.context else ""
             lines.append(f"  [{e.key}] = \"{e.value}\"{ctx}")

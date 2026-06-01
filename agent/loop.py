@@ -91,25 +91,57 @@ def _build_system_prompt(memory_entries: dict) -> str:
     else:
         memory_section = "## Long-term memory\nNo entries yet."
 
-    return f"""You are a helpful, friendly AI assistant with persistent memory.
+    return f"""You are a helpful, friendly AI assistant with persistent long-term memory.
 
 {memory_section}
 
-## Behaviour guidelines
-- When the user shares personal information (name, goals, projects, preferences), 
-  call `save_memory` to persist it.
-- When answering questions that might depend on past context, call `search_memory`
-  to verify your recall before responding.
-- Use `calculator` for any arithmetic to avoid errors.
-- Use `current_time` when date/time is relevant.
-- When a tool returns a concrete value, include that exact value in your reply.
-- When answering with `current_time`, say that you checked the current time/date.
-    Do not say or imply that the user provided the time or date.
-    Never use placeholder text like "[insert current date]" or "[insert current time]".
-- Use `summarize_history` when a recap would help.
-- Be concise but warm. Acknowledge what you remember about the user when relevant.
-- Never claim to remember something you haven't verified via memory tools or the
-  current conversation.
+## CRITICAL: How to use pre-loaded memory
+The section above ("What I know about this user") is VERIFIED information loaded
+from persistent storage. It is 100% accurate and carries over from all previous
+sessions. You MUST treat it as ground truth.
+
+Rules:
+1. If the user asks for any information that is already listed above (name, job,
+   preferences, etc.), answer DIRECTLY from the list — do NOT call search_memory,
+   do NOT ask the user to tell you again.
+2. Only call search_memory if the user asks for something that is NOT visible
+   in the list above. Never call it for information that is already shown there.
+3. Your response MUST be plain conversational text. Do NOT output JSON, schemas,
+   or any technical representation of memory contents.
+
+## Rules for every tool
+A tool call is a real API invocation that returns a result you can see.
+DO NOT write text that describes or simulates what a tool would do.
+Only say something happened (e.g. "I saved that") AFTER the tool has returned.
+
+### save_memory
+Call whenever the user tells you something about themselves. Always use a canonical key:
+
+| key          | save when the user mentions…                                        |
+|--------------|---------------------------------------------------------------------|
+| `name`       | their name, what to call them                                       |
+| `preference` | likes, dislikes, favourites, things they enjoy or hate              |
+| `work`       | job, profession, occupation, career, what they do (for a living)    |
+| `project`    | app, side-project, anything they are building / developing / making |
+| `goal`       | aim, objective, ambition, plan, what they want to achieve           |
+
+If you do not call the tool, the information is NOT saved.
+
+### search_memory
+Call ONLY when the user asks about something they may have shared before AND it
+is NOT already visible in the pre-loaded memory list above.
+
+### Honesty rule
+ONLY say you don't know something if it is absent from the pre-loaded memory list
+AND search_memory returns nothing. If it IS in the list, use it directly.
+
+## Other tools
+- `calculator`: use for any arithmetic; never compute mentally.
+- `current_time`: MUST be called before answering any question about the current
+  date, day, or time. Never guess — always call the tool and report the exact result.
+- `summarize_history`: use when the user asks for a recap.
+
+Be concise but warm. Answer from pre-loaded memory first, tools second.
 """
 
 
@@ -124,16 +156,56 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
             updates.append({"key": key, "value": value, "context": context})
 
     patterns: list[tuple[str, str, str]] = [
+        # ── name ──────────────────────────────────────────────────────────────
         (r"\bmy name is\s+([^.,;!?]+)", "name", "The user told us their name."),
+        (r"\bcall me\s+([^.,;!?]+)", "name", "The user told us what to call them."),
+        (r"\bpeople call me\s+([^.,;!?]+)", "name", "The user told us their name."),
+        (r"\byou can call me\s+([^.,;!?]+)", "name", "The user told us what to call them."),
+        (r"\bi(?:'m| am) known as\s+([^.,;!?]+)", "name", "The user told us their name."),
+
+        # ── goals (aim / objective / ambition / plan) ─────────────────────────
         (r"\bmy goal is\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bmy aim is\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bmy objective is\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bmy ambition is\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bi(?:'m| am) trying to\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bi want to\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bi hope to\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (r"\bi plan to\s+([^.,;!?]+)", "goal", "The user described a goal."),
+
+        # ── work (job / profession / occupation / career) ─────────────────────
+        (r"\bi work (?:on|in|at|for)\s+([^.,;!?]+)", "work", "The user described their work or industry."),
+        (r"\bi work as\s+([^.,;!?]+)", "work", "The user described their profession."),
+        (r"\bmy job is\s+([^.,;!?]+)", "work", "The user described their job."),
+        (r"\bmy profession is\s+([^.,;!?]+)", "work", "The user described their profession."),
+        (r"\bmy occupation is\s+([^.,;!?]+)", "work", "The user described their occupation."),
+        (r"\bmy career is\s+([^.,;!?]+)", "work", "The user described their career."),
+        (r"\bi(?:'m| am) employed as\s+([^.,;!?]+)", "work", "The user described their job."),
+        (r"\bi(?:'m| am) working as\s+([^.,;!?]+)", "work", "The user described their job."),
+        (r"\bwhat i do (?:is|for a living is?)\s+([^.,;!?]+)", "work", "The user described what they do."),
+        (r"\bi do\s+([^.,;!?]+?)\s+for a living", "work", "The user described what they do for a living."),
+        (r"\bi(?:'m| am) a\s+([^.,;!?]+?)\s+(?:by profession|professionally|by trade)", "work", "The user described their profession."),
+
+        # ── projects (app / side-project / thing being built) ─────────────────
         (r"\bmy project is called\s+([^.,;!?]+)", "project", "The user named a project."),
         (r"\bmy secret project is called\s+([^.,;!?]+)", "project", "The user named a project."),
+        (r"\bmy current project is\s+([^.,;!?]+)", "project", "The user described their current project."),
         (r"\bi(?:'m| am) building\s+([^.,;!?]+)", "project", "The user described what they are building."),
-        (r"\bi work on\s+([^.,;!?]+)", "project", "The user described what they work on."),
+        (r"\bi(?:'m| am) working on\s+([^.,;!?]+)", "project", "The user described what they are working on."),
+        (r"\bi(?:'m| am) developing\s+([^.,;!?]+)", "project", "The user described what they are developing."),
+        (r"\bi(?:'m| am) creating\s+([^.,;!?]+)", "project", "The user described what they are creating."),
+        (r"\bi(?:'m| am) making\s+([^.,;!?]+)", "project", "The user described what they are making."),
+
+        # ── preferences (likes / dislikes / favorites) ─────────────────────────
         (r"\bi prefer\s+([^.,;!?]+)", "preference", "The user described a preference."),
         (r"\bi love\s+([^.,;!?]+)", "preference", "The user described something they like."),
-        (r"\bmy favourite color is\s+([^.,;!?]+)", "preference", "The user described a preference."),
-        (r"\bmy favorite color is\s+([^.,;!?]+)", "preference", "The user described a preference."),
+        (r"\bi like\s+([^.,;!?]+)", "preference", "The user described something they like."),
+        (r"\bi enjoy\s+([^.,;!?]+)", "preference", "The user described something they enjoy."),
+        (r"\bi dislike\s+([^.,;!?]+)", "preference", "The user described something they dislike."),
+        (r"\bi hate\s+([^.,;!?]+)", "preference", "The user described something they dislike."),
+        (r"\bmy preference is\s+([^.,;!?]+)", "preference", "The user described a preference."),
+        (r"\bmy favou?rite (?:color|colour|food|music|sport|hobby) is\s+([^.,;!?]+)", "preference", "The user described a preference."),
+        (r"\bmy favorite (?:color|colour|food|music|sport|hobby) is\s+([^.,;!?]+)", "preference", "The user described a preference."),
     ]
 
     for pattern, key, context in patterns:
@@ -169,7 +241,9 @@ def _is_time_request(user_message: str) -> bool:
     """Detect simple date/time questions that should be answered deterministically."""
     return bool(
         re.search(
-            r"\b(current\s+utc\s+time|current\s+time|what\s+day\s+is\s+it|what\s+time\s+is\s+it|today\b|date\b|time\b)",
+            r"\b(current\s+utc\s+time|current\s+time|what\s+day\s+is\s+it|what\s+time\s+is\s+it"
+            r"|what\s+day|what\s+date|what\s+time|today\b|date\b|time\b|day\s+is\s+it"
+            r"|remind\s+me\s+what\s+d[a-z]{1,3}\s+it\s+is)",
             user_message,
             flags=re.IGNORECASE,
         )
