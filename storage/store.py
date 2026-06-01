@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -88,18 +89,35 @@ class StorageManager:
     def save_memory(self, memory: MemoryStore) -> None:
         self._write(self._memory_path(memory.session_id), memory.model_dump())
 
+    @staticmethod
+    def _value_slug(value: str) -> str:
+        return re.sub(r'[^a-z0-9]+', '_', value.lower().strip())[:40].strip('_')
+
     def upsert_memory_entry(self, session_id: str, key: str, value: str, context: str | None = None) -> MemoryEntry:
         memory = self.load_memory(session_id)
         now = datetime.utcnow()
 
+        compound_key = f"{key}:{self._value_slug(value)}"
+
+        # Migrate any old-format entry for this category (plain key, no ':')
         if key in memory.entries:
-            entry = memory.entries[key]
+            old_entry = memory.entries.pop(key)
+            old_compound = f"{key}:{self._value_slug(old_entry.value)}"
+            old_entry.category = key
+            old_entry.key = old_compound
+            memory.entries[old_compound] = old_entry
+
+        if compound_key in memory.entries:
+            entry = memory.entries[compound_key]
             entry.value      = value
             entry.context    = context or entry.context
             entry.updated_at = now
         else:
-            entry = MemoryEntry(key=key, value=value, context=context, saved_at=now, updated_at=now)
-            memory.entries[key] = entry
+            entry = MemoryEntry(
+                key=compound_key, category=key, value=value,
+                context=context, saved_at=now, updated_at=now,
+            )
+            memory.entries[compound_key] = entry
 
         self.save_memory(memory)
         return entry
@@ -131,8 +149,9 @@ class StorageManager:
 
         results = []
         for entry in memory.entries.values():
+            cat = entry.category or entry.key.split(':')[0]
             entry_text = (
-                f"{entry.key.lower()} {entry.value.lower()} "
+                f"{cat.lower()} {entry.value.lower()} "
                 f"{(entry.context or '').lower()}"
             )
             if (

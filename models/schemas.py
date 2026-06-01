@@ -39,6 +39,7 @@ class TraceStep(BaseModel):
 
 class MemoryEntry(BaseModel):
     key: str
+    category: str | None = None  # canonical category ("preference", "work", etc.)
     value: str
     context: str | None = None
     saved_at: datetime = Field(default_factory=datetime.utcnow)

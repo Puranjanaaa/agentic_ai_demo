@@ -85,12 +85,13 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "key": {
                     "type": "string",
                     "description": (
-                        "Canonical category key. Use exactly one of: "
-                        "'name' (also: what to call the user), "
-                        "'preference' (also: likes, dislikes, favorites), "
-                        "'work' (also: job, profession, occupation, career, what they do), "
-                        "'project' (also: app, side-project, thing they are building/developing), "
-                        "'goal' (also: aim, objective, ambition, plan, what they want to achieve)."
+                        "Canonical category. Use one of: "
+                        "'name' (what to call the user), "
+                        "'preference' (likes, dislikes, favorites — call once per preference), "
+                        "'work' (job, profession, career — call once per job/role), "
+                        "'project' (app or thing they are building — call once per project), "
+                        "'goal' (aim, objective, plan — call once per goal). "
+                        "Each call adds a new entry; multiple values per category are stored separately."
                     ),
                 },
                 "value": {

@@ -12,6 +12,7 @@ Requirements:
 import requests
 import sys
 import json
+from collections import defaultdict
 
 BASE = "http://localhost:8000/api/v1"
 
@@ -60,6 +61,34 @@ def print_trace(trace: list):
     print(f"{DIM}  ── end trace ─────────────────────────────────{RESET}\n")
 
 
+def print_session_trace(all_traces: list[list]):
+    """Print a compact summary of everything the agent did across the session."""
+    if not all_traces:
+        return
+
+    llm_calls = 0
+    tool_calls: list[tuple[str, str]] = []  # (tool_name, result)
+
+    for trace in all_traces:
+        for step in trace:
+            if step["step"] == "llm_call":
+                llm_calls += 1
+            elif step["step"] == "tool_call" and step.get("data"):
+                tool_calls.append((
+                    step["data"].get("tool", "?"),
+                    step["data"].get("result", ""),
+                ))
+
+    total_turns = len(all_traces)
+    print(f"\n{DIM}  ── session trace ─────────────────────────────{RESET}")
+    print(f"{DIM}  📊  {total_turns} turn(s)  |  {llm_calls} LLM call(s)  |  {len(tool_calls)} tool call(s){RESET}")
+    if tool_calls:
+        for name, result in tool_calls:
+            snippet = result[:80] + "…" if len(result) > 80 else result
+            print(f"{DIM}  🔧  {name}  →  {snippet}{RESET}")
+    print(f"{DIM}  ── end session trace ─────────────────────────{RESET}\n")
+
+
 def print_banner(session_id: str):
     print(f"""
 {BOLD}{CYAN}╔══════════════════════════════════════════╗
@@ -77,9 +106,13 @@ def print_memory(session_id: str):
     if not mem:
         print(f"{DIM}  (no memory entries yet){RESET}\n")
         return
-    print(f"\n{YELLOW}{BOLD}  Long-term memory:{RESET}")
+    by_cat: dict[str, list[str]] = defaultdict(list)
     for key, entry in mem.items():
-        print(f"{YELLOW}  [{key}]{RESET}  {entry['value']}")
+        cat = entry.get("category") or key.split(":")[0]
+        by_cat[cat].append(entry["value"])
+    print(f"\n{YELLOW}{BOLD}  Long-term memory:{RESET}")
+    for cat, values in by_cat.items():
+        print(f"{YELLOW}  [{cat}]{RESET}  {', '.join(values)}")
     print()
 
 
@@ -107,6 +140,7 @@ def main():
 
     session_id = create_session()
     show_trace = False
+    all_traces: list[list] = []
     print_banner(session_id)
 
     while True:
@@ -114,6 +148,7 @@ def main():
             user_input = input(f"{GREEN}{BOLD}You:{RESET} ").strip()
         except (EOFError, KeyboardInterrupt):
             print(f"\n\n{DIM}Goodbye!{RESET}\n")
+            print_session_trace(all_traces)
             break
 
         if not user_input:
@@ -122,6 +157,7 @@ def main():
         # ── built-in commands ──────────────────────────────────────────────
         if user_input.lower() == "quit":
             print(f"\n{DIM}Goodbye!{RESET}\n")
+            print_session_trace(all_traces)
             break
 
         if user_input.lower() == "trace on":
@@ -149,10 +185,13 @@ def main():
             print(f"\n❌  Error: {e}\n")
             continue
 
+        trace = result.get("trace", [])
+        all_traces.append(trace)
+
         print(f"\n{CYAN}{BOLD}AI_ASSISTANT:{RESET} {result['response']}\n")
 
         if show_trace:
-            print_trace(result["trace"])
+            print_trace(trace)
 
 
 if __name__ == "__main__":
