@@ -91,6 +91,18 @@ uv venv
 source .venv/bin/activate
 ```
 
+> **Don't have `uv` installed?** Install it first:
+>
+> **macOS / Linux:**
+> ```bash
+> curl -LsSf https://astral.sh/uv/install.sh | sh
+> ```
+>
+> **Windows (PowerShell):**
+> ```powershell
+> powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+> ```
+
 ### 4. Install dependencies
 
 ```bash
