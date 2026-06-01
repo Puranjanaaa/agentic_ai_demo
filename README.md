@@ -59,13 +59,11 @@ User message
 
 | Tool | Input | What it does |
 |------|-------|-------------|
-| `save_memory` | `key`, `value`, `context?` | Persists a user fact under a canonical category (`name`, `preference`, `work`, `project`, `goal`). Keyed by `category:value-slug` so multiple entries per category accumulate without overwriting each other. |
-| `search_memory` | `query` | Keyword search over stored memory entries. Used when the pre-loaded system-prompt memory doesn't already answer the question. |
-| `calculator` | `expression` | Safe AST-based math evaluator. Supports `+`, `-`, `*`, `/`, `**`, `%`, `//`, and functions: `sqrt`, `abs`, `round`, `floor`, `ceil`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`. Constants: `pi`, `e`. Never calls `eval()`. |
-| `current_time` | — | Returns the current UTC date, time, and weekday. |
-| `summarize_history` | `focus?` | Serialises the last 20 turns of the conversation for the LLM to summarise. |
-
-The agent is **instructed to call `calculator` for all arithmetic and `current_time` for all date/time questions** — it never computes these in its head.
+| `save_memory` | `key: str` (required) — canonical category: `name`, `preference`, `work`, `project`, or `goal`<br>`value: str` (required) — the fact to store<br>`context: str` (optional) — why this is relevant | Persists a user fact. Entries are keyed by `category:value-slug` so multiple values per category accumulate without overwriting each other. |
+| `search_memory` | `query: str` (required) — keywords or topic to look up | Keyword search over stored memory entries. Used when the pre-loaded system-prompt memory doesn't already answer the question. |
+| `calculator` | `expression: str` (required) — e.g. `sqrt(144) + 2 ** 10` | Safe AST-based math evaluator. Supports `+`, `-`, `*`, `/`, `**`, `%`, `//`, and functions: `sqrt`, `abs`, `round`, `floor`, `ceil`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`. Constants: `pi`, `e`. Never calls `eval()`. |
+| `current_time` | _(none)_ | Returns the current UTC date, time, and weekday. |
+| `summarize_history` | `focus: str` (optional) — aspect to focus on, e.g. `"decisions made"` | Serialises the last 20 turns of the conversation for the LLM to summarise. |
 
 ---
 
@@ -76,13 +74,9 @@ The agent is **instructed to call `calculator` for all arithmetic and `current_t
 Create a `.env` file in the project root:
 
 ```env
-ANTHROPIC_API_KEY=sk-...
-ANTHROPIC_BASE_URL=http://your-llm-host:1234   # optional — omit to use Anthropic directly
+ANTHROPIC_API_KEY= <api_key>
+ANTHROPIC_BASE_URL= <base_url>
 ```
-
-`ANTHROPIC_BASE_URL` supports any OpenAI-compatible proxy or local LLM gateway. A leading `hhttp://` or `hhttps://` prefix is automatically corrected (useful for copy-paste accidents).
-
-You can also override the model with `ANTHROPIC_MODEL` (defaults to `claude-sonnet-4-20250514`).
 
 ### 2. Create data directories
 
@@ -111,9 +105,8 @@ python demo.py
 
 ---
 
-## Terminal Commands
+## In-Chat Terminal Commands
 
-Once the REPL is running:
 
 | Command | Effect |
 |---------|--------|
@@ -138,4 +131,4 @@ Once the REPL is running:
 
 **`MAX_ITERATIONS = 10`** — guards against tool-calling cycles where a misbehaving tool always triggers another call.
 
-**No `eval()` in the calculator** — uses Python's `ast` module to whitelist only numeric operations, eliminating the remote code execution risk of `eval()` on user-supplied strings.
+
