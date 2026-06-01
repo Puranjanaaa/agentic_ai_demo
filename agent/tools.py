@@ -236,7 +236,11 @@ class ToolExecutor:
 
     def _current_time(self) -> str:
         now = datetime.now(timezone.utc)
-        return now.strftime("UTC %Y-%m-%d %H:%M:%S (%A)")
+        return (
+            f"Current UTC date: {now:%Y-%m-%d} | "
+            f"Current UTC time: {now:%H:%M:%S} | "
+            f"Day: {now:%A}"
+        )
 
     def _summarize_history(self, focus: str | None = None) -> str:
         if not self._messages:

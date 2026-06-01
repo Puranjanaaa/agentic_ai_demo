@@ -381,6 +381,14 @@ class TestTools:
         # Response should contain a year-like string
         assert re.search(r"20\d\d", resp["response"])
 
+    def test_current_time_tool_does_not_attribute_time_to_user(self):
+        sid = new_session()
+        resp = chat(sid, "What day is it today?")
+        response_lower = resp["response"].lower()
+        assert "current_time" in trace_tools_used(resp)
+        assert "thank you for providing" not in response_lower
+        assert "you provided" not in response_lower
+
     def test_summarize_history_tool(self):
         sid = new_session()
         chat(sid, "I'm working on a Kubernetes migration project.")

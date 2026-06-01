@@ -102,6 +102,10 @@ def _build_system_prompt(memory_entries: dict) -> str:
   to verify your recall before responding.
 - Use `calculator` for any arithmetic to avoid errors.
 - Use `current_time` when date/time is relevant.
+- When a tool returns a concrete value, include that exact value in your reply.
+- When answering with `current_time`, say that you checked the current time/date.
+    Do not say or imply that the user provided the time or date.
+    Never use placeholder text like "[insert current date]" or "[insert current time]".
 - Use `summarize_history` when a recap would help.
 - Be concise but warm. Acknowledge what you remember about the user when relevant.
 - Never claim to remember something you haven't verified via memory tools or the
@@ -159,6 +163,17 @@ def _infer_calculator_expressions(user_message: str) -> list[str]:
 def _is_summary_request(user_message: str) -> bool:
     """Detect explicit recap / summarize requests."""
     return bool(re.search(r"\b(summarize|summary|recap|summarise)\b", user_message, flags=re.IGNORECASE))
+
+
+def _is_time_request(user_message: str) -> bool:
+    """Detect simple date/time questions that should be answered deterministically."""
+    return bool(
+        re.search(
+            r"\b(current\s+utc\s+time|current\s+time|what\s+day\s+is\s+it|what\s+time\s+is\s+it|today\b|date\b|time\b)",
+            user_message,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 class AgentLoop:
@@ -243,60 +258,64 @@ class AgentLoop:
             summary_result = executor.execute("summarize_history", {})
         model_name = _get_model_name()
 
-        for iteration in range(1, MAX_ITERATIONS + 1):
-            tracer.llm_call(iteration, len(api_messages))
+        if _is_time_request(user_message):
+            time_result = executor.execute("current_time", {})
+            final_response = f"I checked the current UTC date and time: {time_result}."
+        else:
+            for iteration in range(1, MAX_ITERATIONS + 1):
+                tracer.llm_call(iteration, len(api_messages))
+                response = self.client.messages.create(
+                    model=model_name,
+                    max_tokens=4096,
+                    temperature=0,
+                    system=system_prompt,
+                    tools=TOOL_DEFINITIONS,
+                    messages=api_messages,
+                )
 
-            response = self.client.messages.create(
-                model=model_name,
-                max_tokens=4096,
-                temperature=0,
-                system=system_prompt,
-                tools=TOOL_DEFINITIONS,
-                messages=api_messages,
-            )
+                # Always append the assistant turn to maintain valid message history
+                api_messages.append({"role": "assistant", "content": response.content})
 
-            # Always append the assistant turn to maintain valid message history
-            api_messages.append({"role": "assistant", "content": response.content})
+                if response.stop_reason == "end_turn":
+                    # Extract the text response
+                    for block in response.content:
+                        if hasattr(block, "text"):
+                            final_response = block.text
+                            break
+                    break
 
-            if response.stop_reason == "end_turn":
-                # Extract the text response
-                for block in response.content:
-                    if hasattr(block, "text"):
-                        final_response = block.text
-                        break
+                if response.stop_reason == "max_tokens":
+                    # Some local Anthropic-compatible backends stop at the token cap
+                    # before they emit their final answer or tool-use request.  Treat
+                    # this as a resumable state and keep looping with the accumulated
+                    # assistant output so the next pass can continue the turn.
+                    continue
+
+                if response.stop_reason == "tool_use":
+                    # Execute all tool calls in this response and collect results
+                    tool_results: list[dict[str, Any]] = []
+                    for block in response.content:
+                        if block.type == "tool_use":
+                            result_text = executor.execute(block.name, block.input)
+                            if block.name == "calculator" and result_text:
+                                calculator_results.append(result_text)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            })
+
+                    # Feed tool results back as a 'user' turn (Anthropic protocol)
+                    api_messages.append({"role": "user", "content": tool_results})
+                    # Continue the loop → LLM will reason over tool results
+                    continue
+
+                # Unexpected stop reason — surface it as an error response
+                final_response = f"[Agent stopped unexpectedly: {response.stop_reason}]"
                 break
 
-            if response.stop_reason == "max_tokens":
-                # Some local Anthropic-compatible backends stop at the token cap
-                # before they emit their final answer or tool-use request.  Treat
-                # this as a resumable state and keep looping with the accumulated
-                # assistant output so the next pass can continue the turn.
-                continue
-
-            if response.stop_reason == "tool_use":
-                # Execute all tool calls in this response and collect results
-                tool_results: list[dict[str, Any]] = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        result_text = executor.execute(block.name, block.input)
-                        if block.name == "calculator" and result_text:
-                            calculator_results.append(result_text)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result_text,
-                        })
-
-                # Feed tool results back as a 'user' turn (Anthropic protocol)
-                api_messages.append({"role": "user", "content": tool_results})
-                # Continue the loop → LLM will reason over tool results
-                continue
-
-            # Unexpected stop reason — surface it as an error response
-            final_response = f"[Agent stopped unexpectedly: {response.stop_reason}]"
-            break
-        else:
-            final_response = "[Agent reached max iterations without a final response]"
+            if not final_response:
+                final_response = "[Agent reached max iterations without a final response]"
 
         if summary_result and summary_result not in final_response:
             final_response = summary_result
