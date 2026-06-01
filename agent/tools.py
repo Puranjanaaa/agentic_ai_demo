@@ -1,15 +1,3 @@
-"""
-Tool definitions and execution for the AI agent.
-
-Design principles:
-  1. Tool *definitions* (the JSON schema Claude sees) live here alongside
-     their *implementations* — keeps them in sync.
-  2. Each implementation is a plain function with typed args; the dispatcher
-     is the only place that touches the storage layer, so tools stay testable.
-  3. We sandbox the calculator using ast.literal_eval-safe parsing to avoid
-     arbitrary code execution (a common security hole in agent systems).
-"""
-
 from __future__ import annotations
 
 import ast
@@ -21,10 +9,6 @@ from typing import Any
 from agent.tracer import Tracer
 from storage.store import StorageManager
 
-
-# ── Safe calculator ────────────────────────────────────────────────────────
-# Allow only numeric literals and a whitelist of operators/functions.
-# Never use eval() on untrusted input.
 
 _SAFE_OPERATORS = {
     ast.Add: operator.add,
@@ -61,13 +45,13 @@ def _safe_eval(node: ast.AST) -> float:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return float(node.value)
     if isinstance(node, ast.Name) and node.id in _SAFE_FUNCTIONS:
-        return _SAFE_FUNCTIONS[node.id]  # type: ignore[return-value]
+        return _SAFE_FUNCTIONS[node.id]
     if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPERATORS:
-        return _SAFE_OPERATORS[type(node.op)](  # type: ignore[operator]
+        return _SAFE_OPERATORS[type(node.op)](
             _safe_eval(node.left), _safe_eval(node.right)
         )
     if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPERATORS:
-        return _SAFE_OPERATORS[type(node.op)](_safe_eval(node.operand))  # type: ignore[operator]
+        return _SAFE_OPERATORS[type(node.op)](_safe_eval(node.operand))
     if isinstance(node, ast.Call):
         func = _safe_eval(node.func)
         if callable(func):
@@ -76,7 +60,7 @@ def _safe_eval(node: ast.AST) -> float:
     raise ValueError(f"Unsafe expression node: {ast.dump(node)}")
 
 
-# ── Claude tool schema definitions ─────────────────────────────────────────
+# Tool definitions for prompt construction and validation
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
@@ -177,23 +161,15 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
-# ── Tool dispatcher ────────────────────────────────────────────────────────
+# ToolExecutor class to route tool calls to implementations and handle side effects
 
 
 class ToolExecutor:
-    """
-    Executes tool calls requested by the LLM.
-
-    Receives the StorageManager and session_id at construction so individual
-    tool functions remain pure; side-effectful operations are isolated here.
-    """
-
     def __init__(
         self,
         storage: StorageManager,
         session_id: str,
         tracer: Tracer,
-        # The current conversation messages are injected for summarize_history
         messages_snapshot: list[dict[str, Any]] | None = None,
     ) -> None:
         self.storage = storage
@@ -202,7 +178,6 @@ class ToolExecutor:
         self._messages = messages_snapshot or []
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> str:
-        """Route tool call to the correct implementation and return a string result."""
         handlers = {
             "save_memory": self._save_memory,
             "search_memory": self._search_memory,
@@ -222,8 +197,6 @@ class ToolExecutor:
         self.tracer.tool_call(tool_name, tool_input, result)
         return result
 
-    # ── implementations ────────────────────────────────────────────────────
-
     def _save_memory(self, key: str, value: str, context: str | None = None) -> str:
         entry = self.storage.upsert_memory_entry(self.session_id, key, value, context)
         action = "Updated" if entry.updated_at != entry.saved_at else "Saved"
@@ -232,8 +205,8 @@ class ToolExecutor:
     def _search_memory(self, query: str) -> str:
         results = self.storage.search_memory_entries(self.session_id, query)
         if not results:
-            return "Long-term memory is empty — no information has been saved yet."
-        lines = [f"All saved memory ({len(results)} entries):"]
+            return f"No memory entries found matching: {query!r}"
+        lines = [f"Memory entries matching '{query}' ({len(results)} entries):"]
         for e in results:
             ctx = f" ({e.context})" if e.context else ""
             lines.append(f'  [{e.key}] = "{e.value}"{ctx}')
@@ -243,7 +216,6 @@ class ToolExecutor:
         try:
             tree = ast.parse(expression, mode="eval")
             result = _safe_eval(tree)
-            # Present integers cleanly
             if isinstance(result, float) and result.is_integer():
                 return str(int(result))
             return str(round(result, 10))
@@ -266,7 +238,6 @@ class ToolExecutor:
             role = msg.get("role", "?").upper()
             content = msg.get("content", "")
             if isinstance(content, list):
-                # Extract text from content blocks
                 content = " ".join(
                     block.get("text", "")
                     for block in content

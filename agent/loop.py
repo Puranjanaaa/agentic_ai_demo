@@ -1,38 +1,3 @@
-"""
-Core agent loop.
-
-The loop follows the ReAct pattern (Reason + Act):
-
-    ┌─────────────────────────────────────────────────────────────┐
-    │  User message arrives                                        │
-    │       ↓                                                      │
-    │  Load session history  (short-term memory)                   │
-    │       ↓                                                      │
-    │  Load long-term memory  → inject into system prompt          │
-    │       ↓                                                      │
-    │  ┌─── LLM call ────────────────────────────────────────┐    │
-    │  │  stop_reason == "tool_use"?                          │    │
-    │  │    → execute each tool                               │    │
-    │  │    → append tool results as new "user" turn          │    │
-    │  │    → loop back to LLM call                          │    │
-    │  │  stop_reason == "end_turn"?                          │    │
-    │  │    → extract text response, exit loop               │    │
-    │  └──────────────────────────────────────────────────────┘    │
-    │       ↓                                                      │
-    │  Persist updated history                                     │
-    │       ↓                                                      │
-    │  Return response + trace                                     │
-    └─────────────────────────────────────────────────────────────┘
-
-Design decisions:
-  - MAX_ITERATIONS guards against infinite tool loops (e.g. a buggy tool
-    that always triggers another tool call).
-  - The system prompt is rebuilt on every run so it always reflects the
-    latest memory state without needing a separate "memory retrieval" pass.
-  - Tool results are fed back as the 'user' role per the Anthropic multi-turn
-    tool-use protocol.
-"""
-
 from __future__ import annotations
 
 import os
@@ -47,19 +12,16 @@ from agent.tracer import Tracer
 from models.schemas import HistoryMessage, MessageRole
 from storage.store import StorageManager
 
-# Safety cap on tool-call iterations per user turn
-MAX_ITERATIONS = 10
 
+MAX_ITERATIONS = 10
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
 
 def _get_model_name() -> str:
-    """Resolve the model name from the environment, with a safe default."""
     return os.environ.get("ANTHROPIC_MODEL") or os.environ.get("MODEL") or DEFAULT_MODEL
 
 
 def _get_base_url() -> str | None:
-    """Resolve the Anthropic-compatible base URL and fix common typos."""
     base_url = os.environ.get("ANTHROPIC_BASE_URL")
     if not base_url:
         return None
@@ -72,13 +34,6 @@ def _get_base_url() -> str | None:
 
 
 def _build_system_prompt(memory_entries: dict) -> str:
-    """
-    Construct the system prompt, embedding long-term memory so Claude
-    always has user context without an explicit search_memory call.
-
-    We still expose search_memory as a tool so Claude can verify or
-    surface specific details during reasoning.
-    """
     memory_section = ""
     if memory_entries:
         by_category: dict[str, list[str]] = defaultdict(list)
@@ -95,6 +50,13 @@ def _build_system_prompt(memory_entries: dict) -> str:
     return f"""You are a helpful, friendly AI assistant with persistent long-term memory \
 and broad general knowledge. You can answer ANY question — factual, scientific, technical, \
 creative — using your own knowledge. Memory is only for personal details the user has shared.
+
+## MANDATORY TOOL RULES — follow these before anything else
+- `calculator`: You MUST call this tool for ALL arithmetic and math, including sqrt, simple \
+multiplication, percentages, etc. NEVER compute in your head or guess. Call the tool first, \
+then give the exact result it returns in your response.
+- `current_time`: You MUST call this tool before answering ANY question about the current \
+date, day, or time. NEVER guess or infer the date. Call the tool first, then answer naturally.
 
 {memory_section}
 
@@ -118,17 +80,22 @@ Respond like a knowledgeable friend, not a system. NEVER:
   "I checked the time", "let me look that up", or anything that reveals tool usage.
 - Explain where your information comes from ("Based on what you told me...", "According to my records...")
 - Use robotic filler ("I'd be happy to help!", "Certainly!", "Of course!")
-- Acknowledge uncertainty about internal systems ("I don't have that saved", "I don't have personal info about X")
+- Acknowledge uncertainty about internal systems ("I don't have that saved", "I don't have personal info about X",
+  "I don't have any information about your preferences/hobbies", "I don't have details about X", or ANY phrase
+  that references memory, storage, or information systems). When you don't know a personal detail, say so with
+  a simple human response: "Not that I know of." / "I'm not sure." / "I don't think so." — never explain WHY
+  you don't know or reference the source of your (lack of) knowledge.
 
 Instead:
 - When the user tells you their name: just greet them naturally. ("Hey Ben!" / "Nice to meet you!")
 - When the user shares a preference or hobby: briefly acknowledge it. ("Nice!" / "That's fun!" / "Cool!")
   Do NOT repeat the preference back in a robotic way. Do NOT reference unrelated past preferences.
 - For personal facts you know: answer directly. ("Your name is Alex." / "You love pasta.")
-- For dates and times: state the answer directly. ("Today is Monday, June 1st.")
-- For calculations: just give the answer. ("That comes to $25.04.")
+- For dates and times: call `current_time` first (mandatory — see top of prompt), then state the result naturally.
+- For calculations: call `calculator` first (mandatory — see top of prompt), then give the exact result the tool returns. If the result is not a whole number, show up to 3 decimal places — NEVER round to a whole number unless it truly is one (e.g. sqrt(4) = 2, but sqrt(243) = 15.588).
 - For general knowledge: answer directly and naturally.
-- For things you genuinely don't know: say so simply. ("I'm not sure about that.")
+- For personal facts you don't know (e.g. user asks "do I like tennis?" and it's not in memory): give a short,
+  natural reply — "Not that I know of." / "I don't think so." / "I'm not sure." Never mention memory or info systems.
 
 ## Rules for every tool
 Tools are called silently in the background. The user never sees tool calls or results — only your
@@ -152,9 +119,10 @@ Call ONLY when the user asks about personal details they may have shared before 
 answer is NOT already in the pre-loaded memory list above.
 
 ## Other tools
-- `calculator`: use for any arithmetic; never compute mentally. Give the result naturally in your response.
-- `current_time`: MUST be called before answering any question about the current date, day,
-  or time. Never guess — call the tool, then state the answer naturally (e.g. "Today is Monday, June 1st.").
+- `calculator`: MUST be called for ALL arithmetic — even simple operations. NEVER compute mentally or
+  guess. Always call the tool first, then give the result naturally in your response.
+- `current_time`: MUST be called before answering ANY question about the current date, day, or time.
+  NEVER guess or infer the date — always call the tool first, then state the answer naturally.
 - `summarize_history`: use when the user asks for a recap or summary. Read the history returned
   by the tool and write a concise 3-5 sentence summary in your own words.
 
@@ -163,8 +131,15 @@ Keep responses short and natural. Answer the question directly.
 
 
 def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
-    """Extract a small set of obvious self-descriptions worth remembering."""
-    normalized = " ".join(user_message.strip().split())
+    # Only scan declarative sentences — questions can contain "I like/love/…"
+    # patterns that would produce false positives (e.g. "do I like tennis?").
+    sentences = re.split(r"(?<=[.!?])\s+", user_message.strip())
+    declarative = " ".join(
+        s for s in sentences if s.strip() and not s.strip().endswith("?")
+    )
+    if not declarative:
+        return []
+    normalized = " ".join(declarative.strip().split())
     updates: list[dict[str, str]] = []
 
     def add_update(key: str, value: str, context: str) -> None:
@@ -173,7 +148,7 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
             updates.append({"key": key, "value": value, "context": context})
 
     patterns: list[tuple[str, str, str]] = [
-        # ── name ──────────────────────────────────────────────────────────────
+        # name / what to call them
         (r"\bmy name is\s+([^.,;!?]+)", "name", "The user told us their name."),
         (r"\bcall me\s+([^.,;!?]+)", "name", "The user told us what to call them."),
         (r"\bpeople call me\s+([^.,;!?]+)", "name", "The user told us their name."),
@@ -187,7 +162,7 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
             "name",
             "The user told us their name.",
         ),
-        # ── goals (aim / objective / ambition / plan) ─────────────────────────
+        # goals
         (r"\bmy goal is\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bmy aim is\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bmy objective is\s+([^.,;!?]+)", "goal", "The user described a goal."),
@@ -200,7 +175,7 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
         (r"\bi want to\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bi hope to\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bi plan to\s+([^.,;!?]+)", "goal", "The user described a goal."),
-        # ── work (job / profession / occupation / career) ─────────────────────
+        # profession
         (
             r"\bi work (?:on|in|at|for)\s+([^.,;!?]+)",
             "work",
@@ -244,7 +219,7 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
             "work",
             "The user described their profession.",
         ),
-        # ── projects (app / side-project / thing being built) ─────────────────
+        # projects
         (
             r"\bmy project is called\s+([^.,;!?]+)",
             "project",
@@ -285,7 +260,7 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
             "project",
             "The user described what they are making.",
         ),
-        # ── preferences (likes / dislikes / favorites) ─────────────────────────
+        # preferences
         (r"\bi prefer\s+([^.,;!?]+)", "preference", "The user described a preference."),
         (
             r"\bi love\s+([^.,;!?]+)",
@@ -337,31 +312,72 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
     return updates
 
 
+def _infer_time_query(user_message: str) -> bool:
+    patterns = [
+        r"\bwhat(?:'s| is) the (?:current )?time\b",
+        r"\bwhat time is it\b",
+        r"\bwhat(?:'s| is) (?:today's |the )?date\b",
+        r"\bwhat day is (?:it|today)\b",
+        r"\bcurrent (?:time|date|day)\b",
+        r"\bwhat(?:'s| is) today\b",
+    ]
+    return any(re.search(p, user_message, re.IGNORECASE) for p in patterns)
+
+
+def _infer_summary_request(user_message: str) -> bool:
+    patterns = [
+        r"\bsummar(?:ize|ise|y)\b",
+        r"\brecap\b",
+        r"\bgive me a (?:quick )?(?:summary|overview)\b",
+        r"\bwhat (?:have|did) we (?:talk(?:ed)?|discuss(?:ed)?)\b",
+        r"\bwhat did (?:we|i) say\b",
+    ]
+    return any(re.search(p, user_message, re.IGNORECASE) for p in patterns)
+
+
 def _infer_calculator_expressions(user_message: str) -> list[str]:
-    """Extract simple arithmetic expressions that are obvious from the user's wording."""
     normalized = " ".join(user_message.strip().split())
     expressions: list[str] = []
 
-    match = re.search(
+    # "sqrt 234" or "sqrt(234)"
+    m = re.search(r"\bsqrt\s*\(?\s*(\d+(?:\.\d+)?)\s*\)?", normalized, re.IGNORECASE)
+    if m:
+        expressions.append(f"sqrt({m.group(1)})")
+        return expressions
+
+    # Bare arithmetic: "23 + 45", "100 / 4", "2 ** 8", "12 * 7"
+    m = re.match(
+        r"^\s*(\d+(?:\.\d+)?)\s*([\+\-\*\/]|\*\*|\/\/|%)\s*(\d+(?:\.\d+)?)\s*$",
+        normalized,
+    )
+    if m:
+        expressions.append(f"{m.group(1)} {m.group(2)} {m.group(3)}")
+        return expressions
+
+    # Natural language: "what is 123 * 456" / "calculate 99 + 1"
+    m = re.search(
+        r"(?:what(?:'s| is)|calculate|compute|eval(?:uate)?)\s+(\d[\d\s\+\-\*\/\(\)\.\^%]+)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        expr = m.group(1).strip().replace("^", "**")
+        expressions.append(expr)
+        return expressions
+
+    # Budget-split pattern kept for backwards compatibility
+    m = re.search(
         r"budget is\s+(\d+).+?divide(?: it)? among\s+(\d+)\s+teams?",
         normalized,
         flags=re.IGNORECASE,
     )
-    if match:
-        expressions.append(f"{match.group(1)} / {match.group(2)}")
+    if m:
+        expressions.append(f"{m.group(1)} / {m.group(2)}")
 
     return expressions
 
 
 class AgentLoop:
-    """
-    Stateless callable that runs one user turn through the full agent loop.
-
-    'Stateless' here means the object holds no session state itself —
-    all state lives in the StorageManager.  This makes it safe to share
-    a single AgentLoop instance across requests.
-    """
-
     def __init__(self, storage: StorageManager) -> None:
         self.storage = storage
         base_url = _get_base_url()
@@ -376,34 +392,24 @@ class AgentLoop:
             )
 
     def run(self, session_id: str, user_message: str) -> tuple[str, list]:
-        """
-        Execute one full agent turn.
-
-        Returns:
-            (assistant_response_text, trace_steps)
-        """
         tracer = Tracer()
 
-        # ── 1. Load short-term history ─────────────────────────────────────
         history = self.storage.load_history(session_id)
         tracer.load_history(len(history.messages))
 
-        # ── 2. Load long-term memory ───────────────────────────────────────
         memory_store = self.storage.load_memory(session_id)
         tracer.load_memory(
             len(memory_store.entries),
             list(memory_store.entries.keys()),
         )
 
-        # ── 3. Build the message list for the API ─────────────────────────
         # Convert stored history to Anthropic message format
         api_messages: list[dict[str, Any]] = [
             {"role": msg.role.value, "content": msg.content} for msg in history.messages
         ]
-        # Append the new user turn
         api_messages.append({"role": "user", "content": user_message})
 
-        # ── 4. Agentic loop ────────────────────────────────────────────────
+        # Agentic loop
         system_prompt = _build_system_prompt(memory_store.entries)
         executor = ToolExecutor(
             storage=self.storage,
@@ -413,21 +419,40 @@ class AgentLoop:
         )
 
         final_response = ""
-        calculator_results: list[str] = []
 
         inferred_memory = _infer_memory_updates(user_message)
         if inferred_memory:
             for memory_update in inferred_memory:
                 executor.execute("save_memory", memory_update)
-            memory_store = self.storage.load_memory(session_id)
-            system_prompt = _build_system_prompt(memory_store.entries)
+        pre_tool_calls: list[tuple[str, dict, str]] = []
 
         inferred_calculations = _infer_calculator_expressions(user_message)
-        if inferred_calculations:
-            for expression in inferred_calculations:
-                result_text = executor.execute("calculator", {"expression": expression})
-                if result_text:
-                    calculator_results.append(result_text)
+        for expression in inferred_calculations:
+            result_text = executor.execute("calculator", {"expression": expression})
+            if result_text:
+                pre_tool_calls.append(
+                    ("calculator", {"expression": expression}, result_text)
+                )
+
+        if _infer_time_query(user_message):
+            time_result = executor.execute("current_time", {})
+            pre_tool_calls.append(("current_time", {}, time_result))
+
+        if _infer_summary_request(user_message):
+            summary_result = executor.execute("summarize_history", {})
+            pre_tool_calls.append(("summarize_history", {}, summary_result))
+
+        if pre_tool_calls:
+            tool_use_blocks = [
+                {"type": "tool_use", "id": f"pre_{i}", "name": name, "input": inp}
+                for i, (name, inp, _) in enumerate(pre_tool_calls)
+            ]
+            tool_result_blocks = [
+                {"type": "tool_result", "tool_use_id": f"pre_{i}", "content": res}
+                for i, (_, _, res) in enumerate(pre_tool_calls)
+            ]
+            api_messages.append({"role": "assistant", "content": tool_use_blocks})
+            api_messages.append({"role": "user", "content": tool_result_blocks})
 
         model_name = _get_model_name()
 
@@ -442,11 +467,9 @@ class AgentLoop:
                 messages=api_messages,
             )
 
-            # Always append the assistant turn to maintain valid message history
             api_messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn":
-                # Extract the text response
                 for block in response.content:
                     if hasattr(block, "text"):
                         final_response = block.text
@@ -454,20 +477,13 @@ class AgentLoop:
                 break
 
             if response.stop_reason == "max_tokens":
-                # Some local Anthropic-compatible backends stop at the token cap
-                # before they emit their final answer or tool-use request.  Treat
-                # this as a resumable state and keep looping with the accumulated
-                # assistant output so the next pass can continue the turn.
                 continue
 
             if response.stop_reason == "tool_use":
-                # Execute all tool calls in this response and collect results
                 tool_results: list[dict[str, Any]] = []
                 for block in response.content:
                     if block.type == "tool_use":
                         result_text = executor.execute(block.name, block.input)
-                        if block.name == "calculator" and result_text:
-                            calculator_results.append(result_text)
                         tool_results.append(
                             {
                                 "type": "tool_result",
@@ -476,26 +492,16 @@ class AgentLoop:
                             }
                         )
 
-                # Feed tool results back as a 'user' turn (Anthropic protocol)
                 api_messages.append({"role": "user", "content": tool_results})
-                # Continue the loop → LLM will reason over tool results
                 continue
 
-            # Unexpected stop reason — surface it as an error response
             final_response = f"[Agent stopped unexpectedly: {response.stop_reason}]"
             break
 
         if not final_response:
             final_response = "[Agent reached max iterations without a final response]"
 
-        if calculator_results and not any(
-            result in final_response for result in calculator_results
-        ):
-            final_response = (
-                f"{final_response}\n\nResult: {calculator_results[-1]}".strip()
-            )
-
-        # ── 5. Persist updated history ─────────────────────────────────────
+        # store history
         history.messages.append(
             HistoryMessage(role=MessageRole.USER, content=user_message)
         )

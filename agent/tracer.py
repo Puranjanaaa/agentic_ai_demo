@@ -1,15 +1,3 @@
-"""
-Lightweight tracer for the agent loop.
-
-Design note:
-  A tracer is essentially a structured log that travels WITH the response.
-  This gives the client full visibility into what the agent did — critical
-  for debugging, user trust, and audit requirements in production systems.
-
-  We use a context-local list (passed by reference) rather than a global
-  singleton so parallel requests don't bleed into each other's traces.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -18,12 +6,8 @@ from models.schemas import TraceStep, TraceStepType
 
 
 class Tracer:
-    """Collects trace steps during a single agent run."""
-
     def __init__(self) -> None:
         self._steps: list[TraceStep] = []
-
-    # ── convenience methods (one per step type) ────────────────────────────
 
     def load_history(self, message_count: int) -> None:
         self._steps.append(
@@ -82,8 +66,6 @@ class Tracer:
                 },
             )
         )
-
-    # ── accessors ──────────────────────────────────────────────────────────
 
     def steps(self) -> list[TraceStep]:
         return list(self._steps)

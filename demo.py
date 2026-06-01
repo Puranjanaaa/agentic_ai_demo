@@ -1,19 +1,13 @@
-"""
-Agentic AI – Terminal Chat Demo
-
-Usage:
-    python demo.py
-
-Requirements:
-    - Server running at http://localhost:8000
-    - pip install requests
-"""
-
-import requests
+import os
 import sys
+import uuid
 from collections import defaultdict
 
-BASE = "http://localhost:8000/api/v1"
+from dotenv import load_dotenv
+
+from agent.loop import AgentLoop
+from models.schemas import TraceStep
+from storage.store import StorageManager
 
 CYAN = "\033[96m"
 GREEN = "\033[92m"
@@ -23,23 +17,10 @@ RESET = "\033[0m"
 BOLD = "\033[1m"
 
 
-def create_session() -> str:
-    r = requests.post(f"{BASE}/sessions", json={})
-    r.raise_for_status()
-    return r.json()["session_id"]
-
-
-def chat(session_id: str, message: str) -> dict:
-    r = requests.post(
-        f"{BASE}/chat", json={"session_id": session_id, "message": message}
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-def print_trace(trace: list):
+def print_trace(trace: list[TraceStep]):
     print(f"\n{DIM}  ── agent trace ───────────────────────────────{RESET}")
     for step in trace:
+        step_type = step.step.value
         icon = {
             "load_history": "📂",
             "load_memory": "🧠",
@@ -48,37 +29,36 @@ def print_trace(trace: list):
             "save_history": "💾",
             "save_memory": "📌",
             "response": "✅",
-        }.get(step["step"], "•")
+        }.get(step_type, "•")
 
-        detail = step["detail"]
+        detail = step.detail
 
-        # For tool calls, show tool name + result inline
-        if step["step"] == "tool_call" and step.get("data"):
-            tool = step["data"].get("tool", "")
-            result = step["data"].get("result", "")
+        if step_type == "tool_call" and step.data:
+            tool = step.data.get("tool", "")
+            result = step.data.get("result", "")
             detail = f"{tool}  →  {result}"
 
         print(f"{DIM}  {icon}  {detail}{RESET}")
     print(f"{DIM}  ── end trace ─────────────────────────────────{RESET}\n")
 
 
-def print_session_trace(all_traces: list[list]):
-    """Print a compact summary of everything the agent did across the session."""
+def print_session_trace(all_traces: list[list[TraceStep]]):
     if not all_traces:
         return
 
     llm_calls = 0
-    tool_calls: list[tuple[str, str]] = []  # (tool_name, result)
+    tool_calls: list[tuple[str, str]] = []
 
     for trace in all_traces:
         for step in trace:
-            if step["step"] == "llm_call":
+            step_type = step.step.value
+            if step_type == "llm_call":
                 llm_calls += 1
-            elif step["step"] == "tool_call" and step.get("data"):
+            elif step_type == "tool_call" and step.data:
                 tool_calls.append(
                     (
-                        step["data"].get("tool", "?"),
-                        step["data"].get("result", ""),
+                        step.data.get("tool", "?"),
+                        step.data.get("result", ""),
                     )
                 )
 
@@ -105,47 +85,47 @@ Commands: 'trace on/off'  |  'memory'  |  'history'  |  'quit'{RESET}
 """)
 
 
-def print_memory(session_id: str):
-    r = requests.get(f"{BASE}/sessions/{session_id}/memory")
-    mem = r.json().get("memory", {})
+def print_memory(storage: StorageManager, session_id: str):
+    mem = storage.load_memory(session_id).entries
     if not mem:
         print(f"{DIM}  (no memory entries yet){RESET}\n")
         return
     by_cat: dict[str, list[str]] = defaultdict(list)
     for key, entry in mem.items():
-        cat = entry.get("category") or key.split(":")[0]
-        by_cat[cat].append(entry["value"])
+        cat = entry.category or key.split(":")[0]
+        by_cat[cat].append(entry.value)
     print(f"\n{YELLOW}{BOLD}  Long-term memory:{RESET}")
     for cat, values in by_cat.items():
         print(f"{YELLOW}  [{cat}]{RESET}  {', '.join(values)}")
     print()
 
 
-def print_history(session_id: str):
-    r = requests.get(f"{BASE}/sessions/{session_id}/history")
-    msgs = r.json().get("messages", [])
+def print_history(storage: StorageManager, session_id: str):
+    msgs = storage.load_history(session_id).messages
     if not msgs:
         print(f"{DIM}  (no history yet){RESET}\n")
         return
     print(f"\n{YELLOW}{BOLD}  Conversation history ({len(msgs)} messages):{RESET}")
     for m in msgs:
-        role = "You" if m["role"] == "user" else "AI"
-        print(f"{YELLOW}  {role}:{RESET} {m['content'][:120]}")
+        role = "You" if m.role.value == "user" else "AI"
+        print(f"{YELLOW}  {role}:{RESET} {m.content[:120]}")
     print()
 
 
 def main():
-    # Check server is up
-    try:
-        requests.get("http://localhost:8000/health", timeout=3).raise_for_status()
-    except Exception:
-        print("\n❌  Cannot reach the server at http://localhost:8000")
-        print("    Start it with:  uvicorn main:app --reload --port 8000\n")
+    load_dotenv()
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("\n❌  ANTHROPIC_API_KEY is not set.")
+        print("    Set it in your shell or in a .env file.\n")
         sys.exit(1)
 
-    session_id = create_session()
+    storage = StorageManager(base_dir="data")
+    agent = AgentLoop(storage=storage)
+    session_id = str(uuid.uuid4())
+
     show_trace = False
-    all_traces: list[list] = []
+    all_traces: list[list[TraceStep]] = []
     print_banner(session_id)
 
     while True:
@@ -159,7 +139,6 @@ def main():
         if not user_input:
             continue
 
-        # ── built-in commands ──────────────────────────────────────────────
         if user_input.lower() == "quit":
             print(f"\n{DIM}Goodbye!{RESET}\n")
             print_session_trace(all_traces)
@@ -176,24 +155,21 @@ def main():
             continue
 
         if user_input.lower() == "memory":
-            print_memory(session_id)
+            print_memory(storage, session_id)
             continue
 
         if user_input.lower() == "history":
-            print_history(session_id)
+            print_history(storage, session_id)
             continue
 
-        # ── send to agent ──────────────────────────────────────────────────
         try:
-            result = chat(session_id, user_input)
-        except requests.HTTPError as e:
+            response, trace = agent.run(session_id=session_id, user_message=user_input)
+        except Exception as e:
             print(f"\n❌  Error: {e}\n")
             continue
 
-        trace = result.get("trace", [])
         all_traces.append(trace)
-
-        print(f"\n{CYAN}{BOLD}AI_ASSISTANT:{RESET} {result['response']}\n")
+        print(f"\n{CYAN}{BOLD}AI_ASSISTANT:{RESET} {response}\n")
 
         if show_trace:
             print_trace(trace)
