@@ -11,17 +11,16 @@ Requirements:
 
 import requests
 import sys
-import json
 from collections import defaultdict
 
 BASE = "http://localhost:8000/api/v1"
 
-CYAN   = "\033[96m"
-GREEN  = "\033[92m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
 YELLOW = "\033[93m"
-DIM    = "\033[2m"
-RESET  = "\033[0m"
-BOLD   = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+BOLD = "\033[1m"
 
 
 def create_session() -> str:
@@ -31,7 +30,9 @@ def create_session() -> str:
 
 
 def chat(session_id: str, message: str) -> dict:
-    r = requests.post(f"{BASE}/chat", json={"session_id": session_id, "message": message})
+    r = requests.post(
+        f"{BASE}/chat", json={"session_id": session_id, "message": message}
+    )
     r.raise_for_status()
     return r.json()
 
@@ -40,20 +41,20 @@ def print_trace(trace: list):
     print(f"\n{DIM}  ── agent trace ───────────────────────────────{RESET}")
     for step in trace:
         icon = {
-            "load_history":  "📂",
-            "load_memory":   "🧠",
-            "llm_call":      "🤖",
-            "tool_call":     "🔧",
-            "save_history":  "💾",
-            "save_memory":   "📌",
-            "response":      "✅",
+            "load_history": "📂",
+            "load_memory": "🧠",
+            "llm_call": "🤖",
+            "tool_call": "🔧",
+            "save_history": "💾",
+            "save_memory": "📌",
+            "response": "✅",
         }.get(step["step"], "•")
 
         detail = step["detail"]
 
         # For tool calls, show tool name + result inline
         if step["step"] == "tool_call" and step.get("data"):
-            tool   = step["data"].get("tool", "")
+            tool = step["data"].get("tool", "")
             result = step["data"].get("result", "")
             detail = f"{tool}  →  {result}"
 
@@ -74,14 +75,18 @@ def print_session_trace(all_traces: list[list]):
             if step["step"] == "llm_call":
                 llm_calls += 1
             elif step["step"] == "tool_call" and step.get("data"):
-                tool_calls.append((
-                    step["data"].get("tool", "?"),
-                    step["data"].get("result", ""),
-                ))
+                tool_calls.append(
+                    (
+                        step["data"].get("tool", "?"),
+                        step["data"].get("result", ""),
+                    )
+                )
 
     total_turns = len(all_traces)
     print(f"\n{DIM}  ── session trace ─────────────────────────────{RESET}")
-    print(f"{DIM}  📊  {total_turns} turn(s)  |  {llm_calls} LLM call(s)  |  {len(tool_calls)} tool call(s){RESET}")
+    print(
+        f"{DIM}  📊  {total_turns} turn(s)  |  {llm_calls} LLM call(s)  |  {len(tool_calls)} tool call(s){RESET}"
+    )
     if tool_calls:
         for name, result in tool_calls:
             snippet = result[:80] + "…" if len(result) > 80 else result

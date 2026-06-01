@@ -20,10 +20,8 @@ Interview coverage:
   ✓ Explainable steps    – every response carries a trace; we assert on its shape
 """
 
-import time
 import uuid
 import re
-import pytest
 import requests
 
 BASE = "http://localhost:8000/api/v1"
@@ -32,6 +30,7 @@ BASE = "http://localhost:8000/api/v1"
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def new_session() -> str:
     """Create a fresh session and return its ID."""
@@ -42,7 +41,9 @@ def new_session() -> str:
 
 def chat(session_id: str, message: str) -> dict:
     """Send a message and return the full response body."""
-    r = requests.post(f"{BASE}/chat", json={"session_id": session_id, "message": message})
+    r = requests.post(
+        f"{BASE}/chat", json={"session_id": session_id, "message": message}
+    )
     assert r.status_code == 200, f"Chat failed: {r.text}"
     return r.json()
 
@@ -54,19 +55,15 @@ def trace_steps(response: dict) -> list[str]:
 
 def trace_tools_used(response: dict) -> list[str]:
     """Return list of tool names called in a response."""
-    return [
-        s["data"]["tool"]
-        for s in response["trace"]
-        if s["step"] == "tool_call"
-    ]
+    return [s["data"]["tool"] for s in response["trace"] if s["step"] == "tool_call"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Session management
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestSessions:
 
+class TestSessions:
     def test_create_new_session_generates_uuid(self):
         """POST /sessions with no body returns a valid UUID and is_new=True."""
         r = requests.post(f"{BASE}/sessions", json={})
@@ -108,6 +105,7 @@ class TestSessions:
 # 2. Agent loop – trace structure
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestAgentLoop:
     """
     Every response must carry a trace that proves the full
@@ -130,18 +128,18 @@ class TestAgentLoop:
         resp = chat(sid, "What is 2 + 2?")
         steps = trace_steps(resp)
 
-        assert "load_history"  in steps, "Agent must load history"
-        assert "load_memory"   in steps, "Agent must load long-term memory"
-        assert "llm_call"      in steps, "Agent must call the LLM"
-        assert "save_history"  in steps, "Agent must persist history"
-        assert "response"      in steps, "Agent must record the final response"
+        assert "load_history" in steps, "Agent must load history"
+        assert "load_memory" in steps, "Agent must load long-term memory"
+        assert "llm_call" in steps, "Agent must call the LLM"
+        assert "save_history" in steps, "Agent must persist history"
+        assert "response" in steps, "Agent must record the final response"
 
     def test_trace_step_has_required_fields(self):
         sid = new_session()
         resp = chat(sid, "Hi there!")
         for step in resp["trace"]:
-            assert "step"      in step
-            assert "detail"    in step
+            assert "step" in step
+            assert "detail" in step
             assert "timestamp" in step
 
     def test_trace_load_history_count_grows(self):
@@ -166,8 +164,8 @@ class TestAgentLoop:
         tool_steps = [s for s in resp["trace"] if s["step"] == "tool_call"]
         assert len(tool_steps) >= 1
         for ts in tool_steps:
-            assert "tool"   in ts["data"]
-            assert "input"  in ts["data"]
+            assert "tool" in ts["data"]
+            assert "input" in ts["data"]
             assert "result" in ts["data"]
 
     def test_multi_tool_turn_shows_multiple_llm_calls(self):
@@ -185,8 +183,8 @@ class TestAgentLoop:
 # 3. Short-term history
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestShortTermHistory:
 
+class TestShortTermHistory:
     def test_history_starts_empty(self):
         sid = new_session()
         r = requests.get(f"{BASE}/sessions/{sid}/history")
@@ -228,7 +226,10 @@ class TestShortTermHistory:
         sid = new_session()
         chat(sid, "My favourite colour is ultraviolet-blue.")
         resp = chat(sid, "What colour did I just mention?")
-        assert "ultraviolet-blue" in resp["response"].lower() or "ultraviolet" in resp["response"].lower()
+        assert (
+            "ultraviolet-blue" in resp["response"].lower()
+            or "ultraviolet" in resp["response"].lower()
+        )
 
     def test_history_isolated_between_sessions(self):
         """Messages from session A must not appear in session B."""
@@ -249,8 +250,8 @@ class TestShortTermHistory:
 # 4. Long-term memory
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestLongTermMemory:
 
+class TestLongTermMemory:
     def test_memory_starts_empty(self):
         sid = new_session()
         r = requests.get(f"{BASE}/sessions/{sid}/memory")
@@ -280,7 +281,10 @@ class TestLongTermMemory:
         sid = new_session()
         chat(sid, "I work on airport runway management systems.")
         resp = chat(sid, "What systems do I work on?")
-        assert "airport" in resp["response"].lower() or "runway" in resp["response"].lower()
+        assert (
+            "airport" in resp["response"].lower()
+            or "runway" in resp["response"].lower()
+        )
 
     def test_agent_recalls_multiple_facts(self):
         sid = new_session()
@@ -288,7 +292,11 @@ class TestLongTermMemory:
         resp = chat(sid, "Remind me of my name and my goal.")
         response_lower = resp["response"].lower()
         assert "tomasz" in response_lower
-        assert "rag" in response_lower or "q3" in response_lower or "pipeline" in response_lower
+        assert (
+            "rag" in response_lower
+            or "q3" in response_lower
+            or "pipeline" in response_lower
+        )
 
     def test_memory_persists_across_new_agent_turns(self):
         """
@@ -348,8 +356,8 @@ class TestLongTermMemory:
 # 5. Tool usage
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestTools:
 
+class TestTools:
     def test_calculator_basic_arithmetic(self):
         sid = new_session()
         resp = chat(sid, "What is 123 * 456?")
@@ -402,7 +410,10 @@ class TestTools:
     def test_multiple_tools_in_one_turn(self):
         """Agent should call both save_memory and calculator in a single turn."""
         sid = new_session()
-        resp = chat(sid, "My budget is 512 and I need to divide it among 4 teams. Also remember I manage 4 teams.")
+        resp = chat(
+            sid,
+            "My budget is 512 and I need to divide it among 4 teams. Also remember I manage 4 teams.",
+        )
         tools = trace_tools_used(resp)
         assert "calculator" in tools
         assert "128" in resp["response"]  # 512 / 4
@@ -412,13 +423,13 @@ class TestTools:
 # 6. Error handling & validation
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestErrorHandling:
 
+class TestErrorHandling:
     def test_chat_with_unknown_session_returns_404(self):
-        r = requests.post(f"{BASE}/chat", json={
-            "session_id": "ghost-session-xyz",
-            "message": "Hello!"
-        })
+        r = requests.post(
+            f"{BASE}/chat",
+            json={"session_id": "ghost-session-xyz", "message": "Hello!"},
+        )
         assert r.status_code == 404
         assert "not found" in r.json()["detail"].lower()
 
@@ -448,8 +459,8 @@ class TestErrorHandling:
 # 7. Full end-to-end scenario (mirrors the interview spec exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestEndToEndScenario:
 
+class TestEndToEndScenario:
     def test_stefan_airport_scenario(self):
         """
         Exact scenario from the interview spec:
@@ -463,11 +474,11 @@ class TestEndToEndScenario:
 
         # Trace must show the full pipeline
         steps1 = trace_steps(resp1)
-        assert "load_history"  in steps1
-        assert "load_memory"   in steps1
-        assert "llm_call"      in steps1
-        assert "save_history"  in steps1
-        assert "response"      in steps1
+        assert "load_history" in steps1
+        assert "load_memory" in steps1
+        assert "llm_call" in steps1
+        assert "save_history" in steps1
+        assert "response" in steps1
 
         # Memory must have been saved
         assert "save_memory" in trace_tools_used(resp1)
@@ -475,7 +486,7 @@ class TestEndToEndScenario:
         # ── Verify memory was written ───────────────────────────────────────
         mem = requests.get(f"{BASE}/sessions/{sid}/memory").json()["memory"]
         all_values = " ".join(e["value"] for e in mem.values()).lower()
-        assert "stefan"  in all_values
+        assert "stefan" in all_values
         assert "airport" in all_values
 
         # ── Turn 2 ─────────────────────────────────────────────────────────
@@ -496,26 +507,39 @@ class TestEndToEndScenario:
         sid = new_session()
 
         # Turn 1 – introduce yourself
-        chat(sid, "Hi! I'm Lena and my goal is to reduce airport gate conflicts by 30%.")
+        chat(
+            sid, "Hi! I'm Lena and my goal is to reduce airport gate conflicts by 30%."
+        )
 
         # Turn 2 – add more context
         chat(sid, "I'm using a greedy graph-colouring algorithm for the scheduling.")
 
         # Turn 3 – use the calculator
-        resp3 = chat(sid, "If I have 240 gates and need 30% fewer conflicts, how many conflict reductions is that?")
+        resp3 = chat(
+            sid,
+            "If I have 240 gates and need 30% fewer conflicts, how many conflict reductions is that?",
+        )
         assert "72" in resp3["response"]  # 240 * 0.30 = 72
         assert "calculator" in trace_tools_used(resp3)
 
         # Turn 4 – recall memory
         resp4 = chat(sid, "What's my name and what algorithm am I using?")
         r4_lower = resp4["response"].lower()
-        assert "lena"   in r4_lower
-        assert "graph"  in r4_lower or "colouring" in r4_lower or "coloring" in r4_lower or "greedy" in r4_lower
+        assert "lena" in r4_lower
+        assert (
+            "graph" in r4_lower
+            or "colouring" in r4_lower
+            or "coloring" in r4_lower
+            or "greedy" in r4_lower
+        )
 
         # Turn 5 – history check
         resp5 = chat(sid, "Summarize everything we've discussed.")
         assert "summarize_history" in trace_tools_used(resp5)
-        assert "lena" in resp5["response"].lower() or "airport" in resp5["response"].lower()
+        assert (
+            "lena" in resp5["response"].lower()
+            or "airport" in resp5["response"].lower()
+        )
 
         # All 5 turns × 2 messages = 10 messages in history
         history = requests.get(f"{BASE}/sessions/{sid}/history").json()

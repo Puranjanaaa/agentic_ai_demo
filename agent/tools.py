@@ -9,12 +9,12 @@ Design principles:
   3. We sandbox the calculator using ast.literal_eval-safe parsing to avoid
      arbitrary code execution (a common security hole in agent systems).
 """
+
 from __future__ import annotations
 
 import ast
 import math
 import operator
-import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,24 +27,31 @@ from storage.store import StorageManager
 # Never use eval() on untrusted input.
 
 _SAFE_OPERATORS = {
-    ast.Add:  operator.add,
-    ast.Sub:  operator.sub,
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
     ast.Mult: operator.mul,
-    ast.Div:  operator.truediv,
-    ast.Pow:  operator.pow,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
-    ast.Mod:  operator.mod,
+    ast.Mod: operator.mod,
     ast.FloorDiv: operator.floordiv,
 }
 
 _SAFE_FUNCTIONS = {
-    "sqrt": math.sqrt, "abs": abs,
+    "sqrt": math.sqrt,
+    "abs": abs,
     "round": lambda x, n=0: round(x, int(n)),
-    "floor": math.floor, "ceil": math.ceil,
-    "log": math.log, "log2": math.log2, "log10": math.log10,
-    "sin": math.sin, "cos": math.cos, "tan": math.tan,
-    "pi": math.pi, "e": math.e,
+    "floor": math.floor,
+    "ceil": math.ceil,
+    "log": math.log,
+    "log2": math.log2,
+    "log10": math.log10,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "pi": math.pi,
+    "e": math.e,
 }
 
 
@@ -172,6 +179,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 # ── Tool dispatcher ────────────────────────────────────────────────────────
 
+
 class ToolExecutor:
     """
     Executes tool calls requested by the LLM.
@@ -188,18 +196,18 @@ class ToolExecutor:
         # The current conversation messages are injected for summarize_history
         messages_snapshot: list[dict[str, Any]] | None = None,
     ) -> None:
-        self.storage   = storage
+        self.storage = storage
         self.session_id = session_id
-        self.tracer    = tracer
+        self.tracer = tracer
         self._messages = messages_snapshot or []
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         """Route tool call to the correct implementation and return a string result."""
         handlers = {
-            "save_memory":       self._save_memory,
-            "search_memory":     self._search_memory,
-            "calculator":        self._calculator,
-            "current_time":      self._current_time,
+            "save_memory": self._save_memory,
+            "search_memory": self._search_memory,
+            "calculator": self._calculator,
+            "current_time": self._current_time,
             "summarize_history": self._summarize_history,
         }
         handler = handlers.get(tool_name)
@@ -219,7 +227,7 @@ class ToolExecutor:
     def _save_memory(self, key: str, value: str, context: str | None = None) -> str:
         entry = self.storage.upsert_memory_entry(self.session_id, key, value, context)
         action = "Updated" if entry.updated_at != entry.saved_at else "Saved"
-        return f"{action} memory: [{key}] = \"{value}\""
+        return f'{action} memory: [{key}] = "{value}"'
 
     def _search_memory(self, query: str) -> str:
         results = self.storage.search_memory_entries(self.session_id, query)
@@ -228,7 +236,7 @@ class ToolExecutor:
         lines = [f"All saved memory ({len(results)} entries):"]
         for e in results:
             ctx = f" ({e.context})" if e.context else ""
-            lines.append(f"  [{e.key}] = \"{e.value}\"{ctx}")
+            lines.append(f'  [{e.key}] = "{e.value}"{ctx}')
         return "\n".join(lines)
 
     def _calculator(self, expression: str) -> str:
@@ -255,12 +263,14 @@ class ToolExecutor:
             return "No conversation history yet."
         lines: list[str] = []
         for msg in self._messages:
-            role    = msg.get("role", "?").upper()
+            role = msg.get("role", "?").upper()
             content = msg.get("content", "")
             if isinstance(content, list):
                 # Extract text from content blocks
                 content = " ".join(
-                    block.get("text", "") for block in content if block.get("type") == "text"
+                    block.get("text", "")
+                    for block in content
+                    if block.get("type") == "text"
                 )
             if content:
                 lines.append(f"{role}: {content[:200]}")

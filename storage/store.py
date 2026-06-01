@@ -9,10 +9,10 @@ Design rationale:
   - We store sessions and memory under separate subdirectories so they can be
     independently archived, backed-up, or migrated to different stores.
 """
+
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +39,7 @@ class StorageManager:
 
     def __init__(self, base_dir: str = "data") -> None:
         self.sessions_dir = Path(base_dir) / "sessions"
-        self.memory_dir   = Path(base_dir) / "memory"
+        self.memory_dir = Path(base_dir) / "memory"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -91,9 +91,11 @@ class StorageManager:
 
     @staticmethod
     def _value_slug(value: str) -> str:
-        return re.sub(r'[^a-z0-9]+', '_', value.lower().strip())[:40].strip('_')
+        return re.sub(r"[^a-z0-9]+", "_", value.lower().strip())[:40].strip("_")
 
-    def upsert_memory_entry(self, session_id: str, key: str, value: str, context: str | None = None) -> MemoryEntry:
+    def upsert_memory_entry(
+        self, session_id: str, key: str, value: str, context: str | None = None
+    ) -> MemoryEntry:
         memory = self.load_memory(session_id)
         now = datetime.utcnow()
 
@@ -109,13 +111,17 @@ class StorageManager:
 
         if compound_key in memory.entries:
             entry = memory.entries[compound_key]
-            entry.value      = value
-            entry.context    = context or entry.context
+            entry.value = value
+            entry.context = context or entry.context
             entry.updated_at = now
         else:
             entry = MemoryEntry(
-                key=compound_key, category=key, value=value,
-                context=context, saved_at=now, updated_at=now,
+                key=compound_key,
+                category=key,
+                value=value,
+                context=context,
+                saved_at=now,
+                updated_at=now,
             )
             memory.entries[compound_key] = entry
 
@@ -139,25 +145,45 @@ class StorageManager:
 
         query_lower = query.lower()
         # Extract meaningful words (length > 2, skip common stop words)
-        _STOP_WORDS = {"the", "and", "for", "are", "was", "what", "who", "when",
-                       "where", "how", "did", "does", "have", "has", "its", "my",
-                       "you", "your", "me", "is", "it", "do", "not", "any"}
+        _STOP_WORDS = {
+            "the",
+            "and",
+            "for",
+            "are",
+            "was",
+            "what",
+            "who",
+            "when",
+            "where",
+            "how",
+            "did",
+            "does",
+            "have",
+            "has",
+            "its",
+            "my",
+            "you",
+            "your",
+            "me",
+            "is",
+            "it",
+            "do",
+            "not",
+            "any",
+        }
         keywords = [
-            w for w in query_lower.replace("'", "").split()
+            w
+            for w in query_lower.replace("'", "").split()
             if len(w) > 2 and w not in _STOP_WORDS
         ]
 
         results = []
         for entry in memory.entries.values():
-            cat = entry.category or entry.key.split(':')[0]
+            cat = entry.category or entry.key.split(":")[0]
             entry_text = (
-                f"{cat.lower()} {entry.value.lower()} "
-                f"{(entry.context or '').lower()}"
+                f"{cat.lower()} {entry.value.lower()} {(entry.context or '').lower()}"
             )
-            if (
-                query_lower in entry_text
-                or any(kw in entry_text for kw in keywords)
-            ):
+            if query_lower in entry_text or any(kw in entry_text for kw in keywords):
                 results.append(entry)
 
         # If nothing matched, return all entries so the LLM always has context

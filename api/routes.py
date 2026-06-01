@@ -6,6 +6,7 @@ Design note:
   format output.  No business logic lives here.  This makes the core agent
   independently testable without standing up the HTTP layer.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -31,7 +32,7 @@ router = APIRouter()
 # you'd use a proper DI framework or lifespan context.
 
 _storage: StorageManager | None = None
-_agent:   AgentLoop | None      = None
+_agent: AgentLoop | None = None
 
 
 def get_storage() -> StorageManager:
@@ -50,6 +51,7 @@ def get_agent(storage: StorageManager = Depends(get_storage)) -> AgentLoop:
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
+
 @router.post(
     "/sessions",
     response_model=StartSessionResponse,
@@ -66,7 +68,11 @@ def start_session(
     if body.session_id:
         is_new = not storage.session_exists(body.session_id)
         session_id = body.session_id
-        msg = "Resumed existing session." if not is_new else "Created new session with provided ID."
+        msg = (
+            "Resumed existing session."
+            if not is_new
+            else "Created new session with provided ID."
+        )
     else:
         session_id = str(uuid.uuid4())
         is_new = True
@@ -121,7 +127,9 @@ def get_history(
     storage: StorageManager = Depends(get_storage),
 ) -> GetHistoryResponse:
     if not storage.session_exists(session_id):
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Session '{session_id}' not found."
+        )
     history = storage.load_history(session_id)
     return GetHistoryResponse(session_id=session_id, messages=history.messages)
 

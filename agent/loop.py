@@ -32,6 +32,7 @@ Design decisions:
   - Tool results are fed back as the 'user' role per the Anthropic multi-turn
     tool-use protocol.
 """
+
 from __future__ import annotations
 
 import os
@@ -54,11 +55,7 @@ DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
 def _get_model_name() -> str:
     """Resolve the model name from the environment, with a safe default."""
-    return (
-        os.environ.get("ANTHROPIC_MODEL")
-        or os.environ.get("MODEL")
-        or DEFAULT_MODEL
-    )
+    return os.environ.get("ANTHROPIC_MODEL") or os.environ.get("MODEL") or DEFAULT_MODEL
 
 
 def _get_base_url() -> str | None:
@@ -86,7 +83,7 @@ def _build_system_prompt(memory_entries: dict) -> str:
     if memory_entries:
         by_category: dict[str, list[str]] = defaultdict(list)
         for entry in memory_entries.values():
-            cat = entry.category or entry.key.split(':')[0]
+            cat = entry.category or entry.key.split(":")[0]
             by_category[cat].append(entry.value)
         lines = ["## What I know about this user (long-term memory)\n"]
         for cat, values in by_category.items():
@@ -180,52 +177,156 @@ def _infer_memory_updates(user_message: str) -> list[dict[str, str]]:
         (r"\bmy name is\s+([^.,;!?]+)", "name", "The user told us their name."),
         (r"\bcall me\s+([^.,;!?]+)", "name", "The user told us what to call them."),
         (r"\bpeople call me\s+([^.,;!?]+)", "name", "The user told us their name."),
-        (r"\byou can call me\s+([^.,;!?]+)", "name", "The user told us what to call them."),
-        (r"\bi(?:'m| am) known as\s+([^.,;!?]+)", "name", "The user told us their name."),
-
+        (
+            r"\byou can call me\s+([^.,;!?]+)",
+            "name",
+            "The user told us what to call them.",
+        ),
+        (
+            r"\bi(?:'m| am) known as\s+([^.,;!?]+)",
+            "name",
+            "The user told us their name.",
+        ),
         # ── goals (aim / objective / ambition / plan) ─────────────────────────
         (r"\bmy goal is\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bmy aim is\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bmy objective is\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bmy ambition is\s+([^.,;!?]+)", "goal", "The user described a goal."),
-        (r"\bi(?:'m| am) trying to\s+([^.,;!?]+)", "goal", "The user described a goal."),
+        (
+            r"\bi(?:'m| am) trying to\s+([^.,;!?]+)",
+            "goal",
+            "The user described a goal.",
+        ),
         (r"\bi want to\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bi hope to\s+([^.,;!?]+)", "goal", "The user described a goal."),
         (r"\bi plan to\s+([^.,;!?]+)", "goal", "The user described a goal."),
-
         # ── work (job / profession / occupation / career) ─────────────────────
-        (r"\bi work (?:on|in|at|for)\s+([^.,;!?]+)", "work", "The user described their work or industry."),
+        (
+            r"\bi work (?:on|in|at|for)\s+([^.,;!?]+)",
+            "work",
+            "The user described their work or industry.",
+        ),
         (r"\bi work as\s+([^.,;!?]+)", "work", "The user described their profession."),
         (r"\bmy job is\s+([^.,;!?]+)", "work", "The user described their job."),
-        (r"\bmy profession is\s+([^.,;!?]+)", "work", "The user described their profession."),
-        (r"\bmy occupation is\s+([^.,;!?]+)", "work", "The user described their occupation."),
+        (
+            r"\bmy profession is\s+([^.,;!?]+)",
+            "work",
+            "The user described their profession.",
+        ),
+        (
+            r"\bmy occupation is\s+([^.,;!?]+)",
+            "work",
+            "The user described their occupation.",
+        ),
         (r"\bmy career is\s+([^.,;!?]+)", "work", "The user described their career."),
-        (r"\bi(?:'m| am) employed as\s+([^.,;!?]+)", "work", "The user described their job."),
-        (r"\bi(?:'m| am) working as\s+([^.,;!?]+)", "work", "The user described their job."),
-        (r"\bwhat i do (?:is|for a living is?)\s+([^.,;!?]+)", "work", "The user described what they do."),
-        (r"\bi do\s+([^.,;!?]+?)\s+for a living", "work", "The user described what they do for a living."),
-        (r"\bi(?:'m| am) a\s+([^.,;!?]+?)\s+(?:by profession|professionally|by trade)", "work", "The user described their profession."),
-
+        (
+            r"\bi(?:'m| am) employed as\s+([^.,;!?]+)",
+            "work",
+            "The user described their job.",
+        ),
+        (
+            r"\bi(?:'m| am) working as\s+([^.,;!?]+)",
+            "work",
+            "The user described their job.",
+        ),
+        (
+            r"\bwhat i do (?:is|for a living is?)\s+([^.,;!?]+)",
+            "work",
+            "The user described what they do.",
+        ),
+        (
+            r"\bi do\s+([^.,;!?]+?)\s+for a living",
+            "work",
+            "The user described what they do for a living.",
+        ),
+        (
+            r"\bi(?:'m| am) a\s+([^.,;!?]+?)\s+(?:by profession|professionally|by trade)",
+            "work",
+            "The user described their profession.",
+        ),
         # ── projects (app / side-project / thing being built) ─────────────────
-        (r"\bmy project is called\s+([^.,;!?]+)", "project", "The user named a project."),
-        (r"\bmy secret project is called\s+([^.,;!?]+)", "project", "The user named a project."),
-        (r"\bmy current project is\s+([^.,;!?]+)", "project", "The user described their current project."),
-        (r"\bi(?:'m| am) building\s+([^.,;!?]+)", "project", "The user described what they are building."),
-        (r"\bi(?:'m| am) working on\s+([^.,;!?]+)", "project", "The user described what they are working on."),
-        (r"\bi(?:'m| am) developing\s+([^.,;!?]+)", "project", "The user described what they are developing."),
-        (r"\bi(?:'m| am) creating\s+([^.,;!?]+)", "project", "The user described what they are creating."),
-        (r"\bi(?:'m| am) making\s+([^.,;!?]+)", "project", "The user described what they are making."),
-
+        (
+            r"\bmy project is called\s+([^.,;!?]+)",
+            "project",
+            "The user named a project.",
+        ),
+        (
+            r"\bmy secret project is called\s+([^.,;!?]+)",
+            "project",
+            "The user named a project.",
+        ),
+        (
+            r"\bmy current project is\s+([^.,;!?]+)",
+            "project",
+            "The user described their current project.",
+        ),
+        (
+            r"\bi(?:'m| am) building\s+([^.,;!?]+)",
+            "project",
+            "The user described what they are building.",
+        ),
+        (
+            r"\bi(?:'m| am) working on\s+([^.,;!?]+)",
+            "project",
+            "The user described what they are working on.",
+        ),
+        (
+            r"\bi(?:'m| am) developing\s+([^.,;!?]+)",
+            "project",
+            "The user described what they are developing.",
+        ),
+        (
+            r"\bi(?:'m| am) creating\s+([^.,;!?]+)",
+            "project",
+            "The user described what they are creating.",
+        ),
+        (
+            r"\bi(?:'m| am) making\s+([^.,;!?]+)",
+            "project",
+            "The user described what they are making.",
+        ),
         # ── preferences (likes / dislikes / favorites) ─────────────────────────
         (r"\bi prefer\s+([^.,;!?]+)", "preference", "The user described a preference."),
-        (r"\bi love\s+([^.,;!?]+)", "preference", "The user described something they like."),
-        (r"\bi like\s+([^.,;!?]+)", "preference", "The user described something they like."),
-        (r"\bi enjoy\s+([^.,;!?]+)", "preference", "The user described something they enjoy."),
-        (r"\bi dislike\s+([^.,;!?]+)", "preference", "The user described something they dislike."),
-        (r"\bi hate\s+([^.,;!?]+)", "preference", "The user described something they dislike."),
-        (r"\bmy preference is\s+([^.,;!?]+)", "preference", "The user described a preference."),
-        (r"\bmy favou?rite (?:color|colour|food|music|sport|hobby) is\s+([^.,;!?]+)", "preference", "The user described a preference."),
-        (r"\bmy favorite (?:color|colour|food|music|sport|hobby) is\s+([^.,;!?]+)", "preference", "The user described a preference."),
+        (
+            r"\bi love\s+([^.,;!?]+)",
+            "preference",
+            "The user described something they like.",
+        ),
+        (
+            r"\bi like\s+([^.,;!?]+)",
+            "preference",
+            "The user described something they like.",
+        ),
+        (
+            r"\bi enjoy\s+([^.,;!?]+)",
+            "preference",
+            "The user described something they enjoy.",
+        ),
+        (
+            r"\bi dislike\s+([^.,;!?]+)",
+            "preference",
+            "The user described something they dislike.",
+        ),
+        (
+            r"\bi hate\s+([^.,;!?]+)",
+            "preference",
+            "The user described something they dislike.",
+        ),
+        (
+            r"\bmy preference is\s+([^.,;!?]+)",
+            "preference",
+            "The user described a preference.",
+        ),
+        (
+            r"\bmy favou?rite (?:color|colour|food|music|sport|hobby) is\s+([^.,;!?]+)",
+            "preference",
+            "The user described a preference.",
+        ),
+        (
+            r"\bmy favorite (?:color|colour|food|music|sport|hobby) is\s+([^.,;!?]+)",
+            "preference",
+            "The user described a preference.",
+        ),
     ]
 
     for pattern, key, context in patterns:
@@ -250,7 +351,6 @@ def _infer_calculator_expressions(user_message: str) -> list[str]:
         expressions.append(f"{match.group(1)} / {match.group(2)}")
 
     return expressions
-
 
 
 class AgentLoop:
@@ -298,8 +398,7 @@ class AgentLoop:
         # ── 3. Build the message list for the API ─────────────────────────
         # Convert stored history to Anthropic message format
         api_messages: list[dict[str, Any]] = [
-            {"role": msg.role.value, "content": msg.content}
-            for msg in history.messages
+            {"role": msg.role.value, "content": msg.content} for msg in history.messages
         ]
         # Append the new user turn
         api_messages.append({"role": "user", "content": user_message})
@@ -369,11 +468,13 @@ class AgentLoop:
                         result_text = executor.execute(block.name, block.input)
                         if block.name == "calculator" and result_text:
                             calculator_results.append(result_text)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result_text,
-                        })
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result_text,
+                            }
+                        )
 
                 # Feed tool results back as a 'user' turn (Anthropic protocol)
                 api_messages.append({"role": "user", "content": tool_results})
@@ -387,8 +488,12 @@ class AgentLoop:
         if not final_response:
             final_response = "[Agent reached max iterations without a final response]"
 
-        if calculator_results and not any(result in final_response for result in calculator_results):
-            final_response = f"{final_response}\n\nResult: {calculator_results[-1]}".strip()
+        if calculator_results and not any(
+            result in final_response for result in calculator_results
+        ):
+            final_response = (
+                f"{final_response}\n\nResult: {calculator_results[-1]}".strip()
+            )
 
         # ── 5. Persist updated history ─────────────────────────────────────
         history.messages.append(

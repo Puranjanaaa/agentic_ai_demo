@@ -12,6 +12,7 @@ Run locally:
 Interactive docs:
     http://localhost:8000/docs
 """
+
 from __future__ import annotations
 
 import os
@@ -69,6 +70,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,          # auto-reload on file changes during development
+        reload=True,  # auto-reload on file changes during development
         log_level="info",
     )
