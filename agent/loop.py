@@ -115,19 +115,27 @@ Rules:
 
 ## Tone and naturalness — CRITICAL
 Respond like a knowledgeable friend, not a system. NEVER:
-- Mention memory, storage, or saving ("I saved that", "I have that in memory", "I remember that!")
+- Mention memory, storage, or saving. Do NOT say anything like "I saved that", "I've noted that",
+  "I'll remember that", "I have that in memory", "I remember that!", or any variation.
+- Announce what tool you are about to use. Do NOT say "let me calculate", "I'll use my calculator",
+  "I checked the time", "let me look that up", or anything that reveals tool usage.
 - Explain where your information comes from ("Based on what you told me...", "According to my records...")
 - Use robotic filler ("I'd be happy to help!", "Certainly!", "Of course!")
 - Acknowledge uncertainty about internal systems ("I don't have that saved", "I don't have personal info about X")
 
 Instead:
-- For personal facts you know: answer directly as if it's just something you know ("Your name is Alex." / "You love pasta.")
-- For general knowledge: answer directly and naturally
-- For things you genuinely don't know: say so simply ("I'm not sure about that." / "I don't know.")
+- When the user tells you their name: just greet them naturally. ("Hey Ben!" / "Nice to meet you!")
+- When the user shares a preference or hobby: briefly acknowledge it. ("Nice!" / "That's fun!" / "Cool!")
+  Do NOT repeat the preference back in a robotic way. Do NOT reference unrelated past preferences.
+- For personal facts you know: answer directly. ("Your name is Alex." / "You love pasta.")
+- For dates and times: state the answer directly. ("Today is Monday, June 1st.")
+- For calculations: just give the answer. ("That comes to $25.04.")
+- For general knowledge: answer directly and naturally.
+- For things you genuinely don't know: say so simply. ("I'm not sure about that.")
 
 ## Rules for every tool
-A tool call is a real API invocation. DO NOT simulate what a tool would do in text.
-Do NOT announce or confirm tool usage to the user.
+Tools are called silently in the background. The user never sees tool calls or results — only your
+final text response. NEVER mention, announce, or allude to any tool in your response.
 
 ### save_memory
 Call whenever the user tells you something personal about themselves. Use a canonical key:
@@ -140,17 +148,18 @@ Call whenever the user tells you something personal about themselves. Use a cano
 | `project`    | app, side-project, anything they are building / developing / making |
 | `goal`       | aim, objective, ambition, plan, what they want to achieve           |
 
-If you do not call the tool, the information is NOT saved.
+After calling save_memory, do NOT mention it. Just respond naturally to the conversation.
 
 ### search_memory
 Call ONLY when the user asks about personal details they may have shared before AND the
 answer is NOT already in the pre-loaded memory list above.
 
 ## Other tools
-- `calculator`: use for any arithmetic; never compute mentally.
+- `calculator`: use for any arithmetic; never compute mentally. Give the result naturally in your response.
 - `current_time`: MUST be called before answering any question about the current date, day,
-  or time. Never guess — always call the tool and report the exact result.
-- `summarize_history`: use when the user asks for a recap.
+  or time. Never guess — call the tool, then state the answer naturally (e.g. "Today is Monday, June 1st.").
+- `summarize_history`: use when the user asks for a recap or summary. Read the history returned
+  by the tool and write a concise 3-5 sentence summary in your own words.
 
 Keep responses short and natural. Answer the question directly.
 """
@@ -243,23 +252,6 @@ def _infer_calculator_expressions(user_message: str) -> list[str]:
     return expressions
 
 
-def _is_summary_request(user_message: str) -> bool:
-    """Detect explicit recap / summarize requests (tolerates common typos like 'summerize')."""
-    return bool(re.search(r"\bsumm[a-z]+\b|\brecap\b", user_message, flags=re.IGNORECASE))
-
-
-def _is_time_request(user_message: str) -> bool:
-    """Detect simple date/time questions that should be answered deterministically."""
-    return bool(
-        re.search(
-            r"\b(current\s+utc\s+time|current\s+time|what\s+day\s+is\s+it|what\s+time\s+is\s+it"
-            r"|what\s+day|what\s+date|what\s+time|today\b|date\b|time\b|day\s+is\s+it"
-            r"|remind\s+me\s+what\s+d[a-z]{1,3}\s+it\s+is)",
-            user_message,
-            flags=re.IGNORECASE,
-        )
-    )
-
 
 class AgentLoop:
     """
@@ -323,7 +315,6 @@ class AgentLoop:
 
         final_response = ""
         calculator_results: list[str] = []
-        summary_result: str | None = None
 
         inferred_memory = _infer_memory_updates(user_message)
         if inferred_memory:
@@ -339,71 +330,62 @@ class AgentLoop:
                 if result_text:
                     calculator_results.append(result_text)
 
-        if _is_summary_request(user_message):
-            summary_result = executor.execute("summarize_history", {})
         model_name = _get_model_name()
 
-        if _is_time_request(user_message):
-            time_result = executor.execute("current_time", {})
-            final_response = f"I checked the current UTC date and time: {time_result}."
-        else:
-            for iteration in range(1, MAX_ITERATIONS + 1):
-                tracer.llm_call(iteration, len(api_messages))
-                response = self.client.messages.create(
-                    model=model_name,
-                    max_tokens=4096,
-                    temperature=0,
-                    system=system_prompt,
-                    tools=TOOL_DEFINITIONS,
-                    messages=api_messages,
-                )
+        for iteration in range(1, MAX_ITERATIONS + 1):
+            tracer.llm_call(iteration, len(api_messages))
+            response = self.client.messages.create(
+                model=model_name,
+                max_tokens=4096,
+                temperature=0,
+                system=system_prompt,
+                tools=TOOL_DEFINITIONS,
+                messages=api_messages,
+            )
 
-                # Always append the assistant turn to maintain valid message history
-                api_messages.append({"role": "assistant", "content": response.content})
+            # Always append the assistant turn to maintain valid message history
+            api_messages.append({"role": "assistant", "content": response.content})
 
-                if response.stop_reason == "end_turn":
-                    # Extract the text response
-                    for block in response.content:
-                        if hasattr(block, "text"):
-                            final_response = block.text
-                            break
-                    break
-
-                if response.stop_reason == "max_tokens":
-                    # Some local Anthropic-compatible backends stop at the token cap
-                    # before they emit their final answer or tool-use request.  Treat
-                    # this as a resumable state and keep looping with the accumulated
-                    # assistant output so the next pass can continue the turn.
-                    continue
-
-                if response.stop_reason == "tool_use":
-                    # Execute all tool calls in this response and collect results
-                    tool_results: list[dict[str, Any]] = []
-                    for block in response.content:
-                        if block.type == "tool_use":
-                            result_text = executor.execute(block.name, block.input)
-                            if block.name == "calculator" and result_text:
-                                calculator_results.append(result_text)
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result_text,
-                            })
-
-                    # Feed tool results back as a 'user' turn (Anthropic protocol)
-                    api_messages.append({"role": "user", "content": tool_results})
-                    # Continue the loop → LLM will reason over tool results
-                    continue
-
-                # Unexpected stop reason — surface it as an error response
-                final_response = f"[Agent stopped unexpectedly: {response.stop_reason}]"
+            if response.stop_reason == "end_turn":
+                # Extract the text response
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        final_response = block.text
+                        break
                 break
 
-            if not final_response:
-                final_response = "[Agent reached max iterations without a final response]"
+            if response.stop_reason == "max_tokens":
+                # Some local Anthropic-compatible backends stop at the token cap
+                # before they emit their final answer or tool-use request.  Treat
+                # this as a resumable state and keep looping with the accumulated
+                # assistant output so the next pass can continue the turn.
+                continue
 
-        if summary_result and summary_result not in final_response:
-            final_response = summary_result
+            if response.stop_reason == "tool_use":
+                # Execute all tool calls in this response and collect results
+                tool_results: list[dict[str, Any]] = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result_text = executor.execute(block.name, block.input)
+                        if block.name == "calculator" and result_text:
+                            calculator_results.append(result_text)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result_text,
+                        })
+
+                # Feed tool results back as a 'user' turn (Anthropic protocol)
+                api_messages.append({"role": "user", "content": tool_results})
+                # Continue the loop → LLM will reason over tool results
+                continue
+
+            # Unexpected stop reason — surface it as an error response
+            final_response = f"[Agent stopped unexpectedly: {response.stop_reason}]"
+            break
+
+        if not final_response:
+            final_response = "[Agent reached max iterations without a final response]"
 
         if calculator_results and not any(result in final_response for result in calculator_results):
             final_response = f"{final_response}\n\nResult: {calculator_results[-1]}".strip()
