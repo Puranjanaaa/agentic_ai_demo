@@ -1,168 +1,141 @@
-# AI Agent
+# Agentic AI Demo
 
-A production-minded AI agent backend with session history, long-term memory, tool use, and execution traces.
+A terminal-based AI chat agent with persistent long-term memory, per-session conversation history, tool use, and a per-turn execution tracer. Built on the Anthropic SDK using a ReAct-style agentic loop.
+
+---
 
 ## Architecture
 
 ```
-ai_agent/
-├── main.py                  # FastAPI app + uvicorn entry point
+agentic_ai_demo/
+├── demo.py                  # Terminal chat REPL — entry point
 ├── requirements.txt
+├── .env                     # API credentials (not committed)
 ├── agent/
-│   ├── loop.py              # Core ReAct agent loop
-│   ├── tools.py             # Tool definitions + safe execution
-│   └── tracer.py            # Per-request execution trace collector
-├── api/
-│   └── routes.py            # HTTP endpoints (thin — no business logic)
+│   ├── loop.py              # Core ReAct agentic loop (AgentLoop)
+│   ├── tools.py             # Tool definitions + safe executor (ToolExecutor)
+│   └── tracer.py            # Per-turn execution trace collector (Tracer)
 ├── models/
-│   └── schemas.py           # Pydantic request/response/internal schemas
+│   └── schemas.py           # Pydantic schemas (TraceStep, MemoryEntry, SessionHistory, …)
 └── storage/
-    └── store.py             # JSON-file persistence (swap for DB here)
+    └── store.py             # JSON-file persistence layer (StorageManager)
+
+data/
+├── memory/
+│   └── global.json          # Long-term memory — shared across all sessions
+└── sessions/
+    └── <session-id>.json    # Per-session conversation history
 ```
 
-## Setup
+### How the agent loop works
 
-```bash
-pip install -r requirements.txt
-# Option A: set it in your shell
-# export ANTHROPIC_API_KEY=sk-...
-#
-# Option B (recommended): add it to .env
-# ANTHROPIC_API_KEY=sk-...
-# Optional: point to a hosted LLM gateway/proxy
-# ANTHROPIC_BASE_URL=https://your-llm-host.example.com
-uvicorn main:app --reload --port 8000
-```
-
-Interactive docs: http://localhost:8000/docs
-
----
-
-## API Walkthrough
-
-### 1. Start a session
-
-```bash
-curl -X POST http://localhost:8000/api/v1/sessions \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-Response:
-```json
-{ "session_id": "abc123", "is_new": true, "message": "Created new session." }
-```
-
----
-
-### 2. Chat — agent saves memory automatically
-
-```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "abc123", "message": "My name is Stefan and I work on airport systems."}'
-```
-
-Response:
-```json
-{
-  "session_id": "abc123",
-  "response": "Nice to meet you, Stefan! I've saved that you work on airport systems — I'll remember that for our future conversations.",
-  "trace": [
-    { "step": "load_history",  "detail": "Loaded 0 messages from session history" },
-    { "step": "load_memory",   "detail": "Injected 0 long-term memory entries into context" },
-    { "step": "llm_call",      "detail": "LLM call #1 with 1 messages" },
-    { "step": "tool_call",     "detail": "Executed tool: save_memory",
-      "data": { "tool": "save_memory", "input": {"key": "name", "value": "Stefan"}, "result": "Saved memory: [name] = \"Stefan\"" } },
-    { "step": "tool_call",     "detail": "Executed tool: save_memory",
-      "data": { "tool": "save_memory", "input": {"key": "work", "value": "airport systems"}, "result": "Saved memory: [work] = \"airport systems\"" } },
-    { "step": "llm_call",      "detail": "LLM call #2 with 5 messages" },
-    { "step": "save_history",  "detail": "Persisted session history (2 total messages)" },
-    { "step": "response",      "detail": "Generated final response for user" }
-  ]
-}
-```
-
----
-
-### 3. Continue later — agent recalls memory
-
-```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "abc123", "message": "What systems do I work on?"}'
-```
-
-The agent will call `search_memory` and return the correct answer.
-
----
-
-### 4. Use the calculator tool
-
-```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "abc123", "message": "What is sqrt(1764) + 2 ** 8?"}'
-```
-
----
-
-### 5. Inspect memory and history
-
-```bash
-# Long-term memory
-curl http://localhost:8000/api/v1/sessions/abc123/memory
-
-# Full conversation history
-curl http://localhost:8000/api/v1/sessions/abc123/history
-```
-
----
-
-## Agent Loop (ReAct Pattern)
+Each user message triggers a full ReAct cycle:
 
 ```
 User message
-    ↓
-Load session history     (short-term / working memory)
-    ↓
-Load long-term memory    (injected into system prompt)
-    ↓
-┌── LLM call ──────────────────────────────────────────┐
-│  stop_reason == "tool_use"?                           │
-│    → execute tools → append results → loop back      │
-│  stop_reason == "end_turn"?                           │
-│    → extract text response, exit loop                │
-└──────────────────────────────────────────────────────┘
-    ↓
-Persist history
-    ↓
-Return response + trace
+    │
+    ├─ Regex pre-scan: extract memory updates, math expressions, time queries, recap requests
+    │      └─ Execute matching tools immediately (before the first LLM call)
+    │
+    ├─ Load session history       (short-term / working memory)
+    ├─ Load long-term memory      (injected into system prompt)
+    │
+    └─ Agentic loop (max 10 iterations)
+           │
+           ├─ LLM call (Anthropic messages API)
+           │
+           ├─ stop_reason == "tool_use"
+           │      └─ ToolExecutor dispatches each tool → appends results → loops
+           │
+           └─ stop_reason == "end_turn"
+                  └─ Extract text response → persist history → return response + trace
 ```
 
-## Tools
+**Memory is global, history is per-session.** Facts the user shares (name, preferences, projects) are written to `data/memory/global.json` and reloaded into the system prompt on every turn. Conversation messages are stored per UUID session in `data/sessions/`.
 
-| Tool | Purpose |
-|------|---------|
-| `save_memory` | Persist user info (name, goals, projects, preferences) |
-| `search_memory` | Keyword search over stored memory |
-| `calculator` | Safe AST-based math evaluation (no `eval()`) |
-| `current_time` | Return UTC datetime |
-| `summarize_history` | Summarise conversation so far |
+---
 
-## Design Decisions
+## Available Tools
 
-**Why file-based storage?**  
-Zero infrastructure dependencies. The `StorageManager` class is the only place that touches the filesystem — replacing it with PostgreSQL/Redis requires changing exactly one file.
+| Tool | Input | What it does |
+|------|-------|-------------|
+| `save_memory` | `key`, `value`, `context?` | Persists a user fact under a canonical category (`name`, `preference`, `work`, `project`, `goal`). Keyed by `category:value-slug` so multiple entries per category accumulate without overwriting each other. |
+| `search_memory` | `query` | Keyword search over stored memory entries. Used when the pre-loaded system-prompt memory doesn't already answer the question. |
+| `calculator` | `expression` | Safe AST-based math evaluator. Supports `+`, `-`, `*`, `/`, `**`, `%`, `//`, and functions: `sqrt`, `abs`, `round`, `floor`, `ceil`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`. Constants: `pi`, `e`. Never calls `eval()`. |
+| `current_time` | — | Returns the current UTC date, time, and weekday. |
+| `summarize_history` | `focus?` | Serialises the last 20 turns of the conversation for the LLM to summarise. |
 
-**Why inject memory into the system prompt AND expose `search_memory`?**  
-The system prompt ensures Claude always has context. The tool lets it explicitly verify or surface specific details during reasoning — two complementary access patterns.
+The agent is **instructed to call `calculator` for all arithmetic and `current_time` for all date/time questions** — it never computes these in its head.
 
-**Why a `Tracer` object per request?**  
-A per-request instance means parallel requests can't bleed into each other's traces. It's also trivially serialisable for logging pipelines.
+---
 
-**Why cap the loop at `MAX_ITERATIONS`?**  
-Defense against tool-calling cycles. A misbehaving tool that always triggers another call would otherwise run indefinitely.
+## Setup
 
-**Why not `eval()` in the calculator?**  
-`eval()` on user-supplied strings is a remote code execution vulnerability. The safe evaluator uses Python's `ast` module to whitelist only numeric operations.
+### 1. Configure environment
+
+Create a `.env` file in the project root:
+
+```env
+ANTHROPIC_API_KEY=sk-...
+ANTHROPIC_BASE_URL=http://your-llm-host:1234   # optional — omit to use Anthropic directly
+```
+
+`ANTHROPIC_BASE_URL` supports any OpenAI-compatible proxy or local LLM gateway. A leading `hhttp://` or `hhttps://` prefix is automatically corrected (useful for copy-paste accidents).
+
+You can also override the model with `ANTHROPIC_MODEL` (defaults to `claude-sonnet-4-20250514`).
+
+### 2. Create data directories
+
+```bash
+mkdir -p data/memory data/sessions
+```
+
+### 3. Create and activate a virtual environment
+
+```bash
+uv venv
+source .venv/bin/activate
+```
+
+### 4. Install dependencies
+
+```bash
+uv pip install -r requirements.txt
+```
+
+### 5. Run
+
+```bash
+python demo.py
+```
+
+---
+
+## Terminal Commands
+
+Once the REPL is running:
+
+| Command | Effect |
+|---------|--------|
+| `trace on` | Show per-turn agent trace after each response |
+| `trace off` | Hide the trace |
+| `memory` | Print all long-term memory entries grouped by category |
+| `history` | Print full conversation history for this session |
+| `quit` | Exit and print a session-level summary (total turns, LLM calls, tool calls) |
+| Ctrl-C / Ctrl-D | Same as `quit` |
+
+---
+
+## Design Notes
+
+**File-based storage** — zero infrastructure dependencies. `StorageManager` is the only place that touches the filesystem; swapping it for a database means changing one file.
+
+**Memory injected into the system prompt AND exposed as a tool** — the system prompt gives the model instant access to known facts; `search_memory` lets it explicitly verify or surface specific details during reasoning. Two complementary access patterns.
+
+**Regex pre-scan before the first LLM call** — common patterns (name declarations, arithmetic, time queries) are detected client-side and the relevant tools are called first. This means the model's first response already has accurate results in context, cutting one round-trip.
+
+**Per-request `Tracer`** — a fresh instance per turn means parallel calls can't bleed into each other's traces, and the trace is trivially serialisable.
+
+**`MAX_ITERATIONS = 10`** — guards against tool-calling cycles where a misbehaving tool always triggers another call.
+
+**No `eval()` in the calculator** — uses Python's `ast` module to whitelist only numeric operations, eliminating the remote code execution risk of `eval()` on user-supplied strings.
